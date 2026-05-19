@@ -1,0 +1,1 @@
+import{j as e}from"./index-5tPOUov4.js";import{i as r,c as n}from"./utils-BjNEjFvq.js";function l({name:i,size:t=32}){return e.jsx("div",{className:`${n(i)} text-white font-semibold rounded-full inline-flex items-center justify-center shrink-0`,style:{width:t,height:t,fontSize:t*.4},children:r(i)})}export{l as C};
