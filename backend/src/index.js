@@ -19,6 +19,9 @@ app.use((req, _, next) => {
   next();
 });
 
+// Swagger UI
+require("./swagger").setupSwagger(app);
+
 // Routes
 app.use("/api/auth",            require("./routes/auth"));
 app.use("/v3/api/v1/tasks",     require("./routes/client-tasks"));
@@ -29,6 +32,8 @@ app.use("/api/admin",           require("./routes/admin"));
 // Health check
 app.get("/", (_, res) => res.json({
   name: "TaxEase API", version: "1.0.0", status: "running",
+  docs: "http://localhost:3001/api-docs",
+  openapi: "http://localhost:3001/api-docs.json",
   routes: {
     auth:      "POST /api/auth/login",
     me:        "GET  /api/auth/me",
@@ -45,6 +50,7 @@ app.use((_, res) => res.status(404).json({ success: false, message: "Route not f
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`\n  TaxEase Backend  →  http://localhost:${PORT}`);
+  console.log(`  Swagger UI       →  http://localhost:${PORT}/api-docs`);
   console.log("  ────────────────────────────────────────────");
   console.log("  POST http://localhost:3001/api/auth/login");
   console.log("  GET  http://localhost:3001/api/admin/dashboard");
