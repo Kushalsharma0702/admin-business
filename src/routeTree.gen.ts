@@ -16,6 +16,7 @@ import { Route as TasksRouteImport } from './routes/tasks'
 import { Route as SubmissionHistoryRouteImport } from './routes/submission-history'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as OcrRouteImport } from './routes/ocr'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as InsightsRouteImport } from './routes/insights'
 import { Route as InboxRouteImport } from './routes/inbox'
 import { Route as FilesRouteImport } from './routes/files'
@@ -74,6 +75,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const OcrRoute = OcrRouteImport.update({
   id: '/ocr',
   path: '/ocr',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const InsightsRoute = InsightsRouteImport.update({
@@ -204,6 +210,7 @@ export interface FileRoutesByFullPath {
   '/files': typeof FilesRoute
   '/inbox': typeof InboxRoute
   '/insights': typeof InsightsRoute
+  '/login': typeof LoginRoute
   '/ocr': typeof OcrRoute
   '/settings': typeof SettingsRouteWithChildren
   '/submission-history': typeof SubmissionHistoryRoute
@@ -237,6 +244,7 @@ export interface FileRoutesByTo {
   '/files': typeof FilesRoute
   '/inbox': typeof InboxRoute
   '/insights': typeof InsightsRoute
+  '/login': typeof LoginRoute
   '/ocr': typeof OcrRoute
   '/submission-history': typeof SubmissionHistoryRoute
   '/tasks': typeof TasksRoute
@@ -269,6 +277,7 @@ export interface FileRoutesById {
   '/files': typeof FilesRoute
   '/inbox': typeof InboxRoute
   '/insights': typeof InsightsRoute
+  '/login': typeof LoginRoute
   '/ocr': typeof OcrRoute
   '/settings': typeof SettingsRouteWithChildren
   '/submission-history': typeof SubmissionHistoryRoute
@@ -304,6 +313,7 @@ export interface FileRouteTypes {
     | '/files'
     | '/inbox'
     | '/insights'
+    | '/login'
     | '/ocr'
     | '/settings'
     | '/submission-history'
@@ -337,6 +347,7 @@ export interface FileRouteTypes {
     | '/files'
     | '/inbox'
     | '/insights'
+    | '/login'
     | '/ocr'
     | '/submission-history'
     | '/tasks'
@@ -368,6 +379,7 @@ export interface FileRouteTypes {
     | '/files'
     | '/inbox'
     | '/insights'
+    | '/login'
     | '/ocr'
     | '/settings'
     | '/submission-history'
@@ -402,6 +414,7 @@ export interface RootRouteChildren {
   FilesRoute: typeof FilesRoute
   InboxRoute: typeof InboxRoute
   InsightsRoute: typeof InsightsRoute
+  LoginRoute: typeof LoginRoute
   OcrRoute: typeof OcrRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   SubmissionHistoryRoute: typeof SubmissionHistoryRoute
@@ -465,6 +478,13 @@ declare module '@tanstack/react-router' {
       path: '/ocr'
       fullPath: '/ocr'
       preLoaderRoute: typeof OcrRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/insights': {
@@ -691,6 +711,7 @@ const rootRouteChildren: RootRouteChildren = {
   FilesRoute: FilesRoute,
   InboxRoute: InboxRoute,
   InsightsRoute: InsightsRoute,
+  LoginRoute: LoginRoute,
   OcrRoute: OcrRoute,
   SettingsRoute: SettingsRouteWithChildren,
   SubmissionHistoryRoute: SubmissionHistoryRoute,

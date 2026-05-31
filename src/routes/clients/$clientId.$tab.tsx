@@ -1,5 +1,7 @@
-import { createFileRoute, useParams } from "@tanstack/react-router";
+import { createFileRoute, useParams, Link } from "@tanstack/react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAppStore, uid } from "@/store/useAppStore";
+import { clientsApi, tasksApi, ADMIN_STATUSES, type ApiTask, type AdminStatus } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/app/EmptyState";
 import { StatusBadge } from "@/components/app/StatusBadge";
 import { fmtDate, fmtMoney } from "@/components/app/utils";
-import { Upload, FileText, StickyNote, Scale, FileQuestion, FilePlus, Receipt, Clock, Send, Plus } from "lucide-react";
+import { Upload, FileText, StickyNote, Scale, FileQuestion, FilePlus, Receipt, Clock, Send, Plus, Loader2, WifiOff } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -16,9 +18,22 @@ export const Route = createFileRoute("/clients/$clientId/$tab")({ component: Cli
 
 function ClientTab() {
   const { clientId, tab } = useParams({ from: "/clients/$clientId/$tab" });
-  const clients = useAppStore((s) => s.clients);
-  const client = useMemo(() => clients.find((c) => c.id === clientId), [clients, clientId]);
-  if (!client) return <div>Not found</div>;
+  const { data: clientRes, isLoading, isError } = useQuery({
+    queryKey: ["client", clientId],
+    queryFn: () => clientsApi.get(clientId),
+  });
+
+  if (isLoading) return (
+    <div className="flex items-center justify-center py-20 text-muted-foreground">
+      <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading client…
+    </div>
+  );
+
+  if (isError || !clientRes?.data) return (
+    <div className="py-10 text-center text-muted-foreground">
+      Client not found. <Link to="/clients" className="text-primary underline">Back</Link>
+    </div>
+  );
 
   switch (tab) {
     case "home": return <Home clientId={clientId} />;
@@ -140,36 +155,208 @@ function Files({ clientId }: { clientId: string }) {
 }
 
 function Tasks({ clientId }: { clientId: string }) {
-  const allTasks = useAppStore((s) => s.tasks);
-  const addTask = useAppStore((s) => s.addTask);
-  const tasks = useMemo(() => allTasks.filter((t) => t.clientId === clientId), [allTasks, clientId]);
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", type: "Review", assignee: "Angela Martin (me)", startDate: "", dueDate: "", priority: "No priority" as const });
-  const active = useMemo(() => tasks.filter((t) => t.status !== "Completed"), [tasks]);
-  const done = useMemo(() => tasks.filter((t) => t.status === "Completed"), [tasks]);
+  const [form, setForm] = useState({
+    title: "",
+    taskType: "info" as string,
+    adminStatus: "Data not received" as AdminStatus,
+    description: "",
+  });
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ["client-tasks", clientId],
+    queryFn: () => tasksApi.listForClient(clientId),
+    staleTime: 15_000,
+  });
+
+  const tasks: ApiTask[] = data?.data ?? [];
+  const active = tasks.filter((t) => t.status !== "complete");
+  const done = tasks.filter((t) => t.status === "complete");
+
+  const handleCreate = async () => {
+    if (!form.title.trim()) { toast.error("Task title is required"); return; }
+    try {
+      await tasksApi.create(clientId, {
+        title: form.title,
+        description: form.description || undefined,
+        taskType: form.taskType,
+        adminStatus: form.adminStatus,
+      });
+      toast.success("Task assigned to client");
+      setOpen(false);
+      setForm({ title: "", taskType: "info", adminStatus: "Data not received", description: "" });
+      queryClient.invalidateQueries({ queryKey: ["client-tasks", clientId] });
+      queryClient.invalidateQueries({ queryKey: ["admin-tasks"] });
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to create task");
+    }
+  };
+
+  const handleStatusChange = async (taskId: string, newStatus: AdminStatus) => {
+    setUpdatingId(taskId);
+    try {
+      await tasksApi.update(taskId, { adminStatus: newStatus });
+      toast.success(`Status → ${newStatus}`);
+      queryClient.invalidateQueries({ queryKey: ["client-tasks", clientId] });
+      queryClient.invalidateQueries({ queryKey: ["admin-tasks"] });
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Update failed");
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const handleDelete = async (taskId: string) => {
+    if (!confirm("Delete this task?")) return;
+    try {
+      await tasksApi.delete(taskId);
+      toast.success("Task deleted");
+      queryClient.invalidateQueries({ queryKey: ["client-tasks", clientId] });
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Delete failed");
+    }
+  };
+
+  if (isLoading) return <div className="flex items-center gap-2 text-muted-foreground py-8 justify-center"><Loader2 className="w-4 h-4 animate-spin" /> Loading tasks…</div>;
+  if (isError) return (
+    <div className="flex flex-col items-center gap-3 py-12 text-center">
+      <WifiOff className="w-8 h-8 text-destructive" />
+      <div className="text-destructive font-medium">Backend not reachable</div>
+      <div className="text-muted-foreground text-sm">Run: <code className="bg-muted px-1.5 py-0.5 rounded text-xs">cd backend && node src/index.js</code></div>
+      <Button size="sm" onClick={() => refetch()}>Retry</Button>
+    </div>
+  );
+
   return (
     <div className="space-y-6">
-      <div className="flex justify-end"><Button onClick={() => setOpen(true)}><Plus className="w-4 h-4 mr-1" />Create task</Button></div>
+      <div className="flex justify-end">
+        <Button onClick={() => setOpen(true)}><Plus className="w-4 h-4 mr-1" />Assign task</Button>
+      </div>
+
+      {/* ── Active tasks ── */}
       <Card className="p-0 overflow-hidden">
         <div className="px-4 py-3 border-b border-border font-semibold text-sm">Active tasks ({active.length})</div>
-        <table className="w-full text-sm"><thead className="text-xs uppercase text-muted-foreground bg-muted/40"><tr><th className="text-left px-4 py-2">Status</th><th className="text-left px-4 py-2">Task name</th><th className="text-left px-4 py-2">Type</th><th className="text-left px-4 py-2">Assignee</th><th className="text-left px-4 py-2">Due</th><th className="text-left px-4 py-2">Priority</th></tr></thead>
-          <tbody>{active.map((t) => <tr key={t.id} className="border-b border-border last:border-0"><td className="px-4 py-2.5"><StatusBadge status={t.status} /></td><td className="px-4 py-2.5 font-medium">{t.name}</td><td className="px-4 py-2.5">{t.type}</td><td className="px-4 py-2.5">{t.assignee}</td><td className="px-4 py-2.5">{fmtDate(t.dueDate)}</td><td className="px-4 py-2.5"><StatusBadge status={t.priority} /></td></tr>)}</tbody></table>
+        {active.length === 0 ? (
+          <div className="px-4 py-6 text-sm text-muted-foreground text-center">No active tasks</div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="text-xs uppercase text-muted-foreground bg-muted/40">
+              <tr>
+                <th className="text-left px-4 py-2">Task</th>
+                <th className="text-left px-4 py-2">Type</th>
+                <th className="text-left px-4 py-2">Client Status</th>
+                <th className="text-left px-4 py-2">Admin Status</th>
+                <th className="text-left px-4 py-2">Assigned</th>
+                <th className="px-4 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {active.map((t) => (
+                <tr key={t.id} className="border-b border-border last:border-0">
+                  <td className="px-4 py-2.5 font-medium">{t.title}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground text-xs">{t.taskType ?? "—"}</td>
+                  <td className="px-4 py-2.5">
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-medium">Pending</span>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <select
+                      value={t.adminStatus}
+                      disabled={updatingId === t.id}
+                      onChange={(e) => handleStatusChange(t.id, e.target.value as AdminStatus)}
+                      className="text-xs border border-border rounded px-1.5 py-1 bg-background min-w-[160px] disabled:opacity-50"
+                    >
+                      {ADMIN_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    {updatingId === t.id && <Loader2 className="inline w-3 h-3 animate-spin ml-1 text-muted-foreground" />}
+                  </td>
+                  <td className="px-4 py-2.5 text-muted-foreground text-xs">{fmtDate(t.createdAt)}</td>
+                  <td className="px-4 py-2.5">
+                    <button onClick={() => handleDelete(t.id)} className="text-xs text-destructive hover:underline">Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </Card>
-      <Card className="p-0 overflow-hidden">
-        <div className="px-4 py-3 border-b border-border font-semibold text-sm">Completed tasks ({done.length})</div>
-        <table className="w-full text-sm"><thead className="text-xs uppercase text-muted-foreground bg-muted/40"><tr><th className="text-left px-4 py-2">Task name</th><th className="text-left px-4 py-2">Type</th><th className="text-left px-4 py-2">Assignee</th><th className="text-left px-4 py-2">Due</th><th className="text-left px-4 py-2">Completed</th><th className="text-left px-4 py-2">Priority</th></tr></thead>
-          <tbody>{done.map((t) => <tr key={t.id} className="border-b border-border last:border-0"><td className="px-4 py-2.5">{t.name}</td><td className="px-4 py-2.5">{t.type}</td><td className="px-4 py-2.5">{t.assignee}</td><td className="px-4 py-2.5">{fmtDate(t.dueDate)}</td><td className="px-4 py-2.5">{fmtDate(t.completedDate)}</td><td className="px-4 py-2.5"><StatusBadge status={t.priority} /></td></tr>)}</tbody></table>
-      </Card>
-      <Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Create task</DialogTitle></DialogHeader>
-        <div className="space-y-3">
-          <Input placeholder="Task name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          <select className="w-full border border-border rounded-md h-9 px-2 text-sm bg-background" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}><option>Review</option><option>eSign Request</option><option>Organizer</option><option>Other</option></select>
-          <Input placeholder="Assignee" value={form.assignee} onChange={(e) => setForm({ ...form, assignee: e.target.value })} />
-          <div className="grid grid-cols-2 gap-2"><Input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} /><Input type="date" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })} /></div>
-        </div>
-        <DialogFooter><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={() => { if (!form.name) return; addTask({ id: uid(), clientId, name: form.name, type: form.type, assignee: form.assignee, startDate: form.startDate, dueDate: form.dueDate, status: "With Client", priority: "No priority" }); setOpen(false); setForm({ ...form, name: "" }); toast.success("Task created"); }}>Create</Button>
-        </DialogFooter></DialogContent></Dialog>
+
+      {/* ── Completed tasks ── */}
+      {done.length > 0 && (
+        <Card className="p-0 overflow-hidden">
+          <div className="px-4 py-3 border-b border-border font-semibold text-sm">Completed by client ({done.length})</div>
+          <table className="w-full text-sm">
+            <thead className="text-xs uppercase text-muted-foreground bg-muted/40">
+              <tr>
+                <th className="text-left px-4 py-2">Task</th>
+                <th className="text-left px-4 py-2">Type</th>
+                <th className="text-left px-4 py-2">Admin Status</th>
+                <th className="text-left px-4 py-2">Completed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {done.map((t) => (
+                <tr key={t.id} className="border-b border-border last:border-0">
+                  <td className="px-4 py-2.5">{t.title}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground text-xs">{t.taskType ?? "—"}</td>
+                  <td className="px-4 py-2.5">
+                    <select
+                      value={t.adminStatus}
+                      disabled={updatingId === t.id}
+                      onChange={(e) => handleStatusChange(t.id, e.target.value as AdminStatus)}
+                      className="text-xs border border-border rounded px-1.5 py-1 bg-background min-w-[160px] disabled:opacity-50"
+                    >
+                      {ADMIN_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-4 py-2.5 text-muted-foreground text-xs">{fmtDate(t.completedAt ?? t.updatedAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+
+      {/* ── Create task dialog ── */}
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Assign task to client</DialogTitle></DialogHeader>
+          <div className="space-y-3 py-1">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Task title *</label>
+              <Input placeholder="e.g. Upload T4 slips" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} className="mt-1" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Task type</label>
+              <select className="mt-1 w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
+                value={form.taskType} onChange={(e) => setForm({ ...form, taskType: e.target.value })}>
+                <option value="info">Info (read + mark complete)</option>
+                <option value="onboarding_form">T2 Onboarding Form</option>
+                <option value="sheet_remarks">Query Sheet Remarks</option>
+                <option value="basic_docs_upload">Documents Upload</option>
+                <option value="payroll">Payroll Setup</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Admin Status</label>
+              <select className="mt-1 w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
+                value={form.adminStatus} onChange={(e) => setForm({ ...form, adminStatus: e.target.value as AdminStatus })}>
+                {ADMIN_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Description (optional)</label>
+              <Textarea placeholder="Instructions shown to the client…" value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} className="mt-1" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button onClick={handleCreate}>Assign task</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

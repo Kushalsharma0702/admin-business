@@ -1,9 +1,9 @@
 import { createFileRoute, Link, Outlet, useParams, useRouterState } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/app/AppShell";
-import { useAppStore } from "@/store/useAppStore";
+import { clientsApi } from "@/lib/api";
 import { ClientAvatar } from "@/components/app/ClientAvatar";
-import { Button } from "@/components/ui/button";
-import { Star, Copy, Pencil } from "lucide-react";
+import { Star, Copy, Pencil, Loader2 } from "lucide-react";
 import { fmtDate } from "@/components/app/utils";
 import { toast } from "sonner";
 
@@ -18,10 +18,29 @@ const tabs = [
 function ClientLayout() {
   const { clientId } = useParams({ from: "/clients/$clientId" });
   const path = useRouterState({ select: (s) => s.location.pathname });
-  const client = useAppStore((s) => s.clients.find((c) => c.id === clientId));
-  if (!client) return <AppShell><div>Client not found. <Link to="/clients" className="text-primary">Back</Link></div></AppShell>;
 
-  const age = client.dob ? new Date().getFullYear() - new Date(client.dob).getFullYear() : "";
+  const { data: res, isLoading, isError } = useQuery({
+    queryKey: ["client", clientId],
+    queryFn: () => clientsApi.get(clientId),
+  });
+
+  if (isLoading) return (
+    <AppShell>
+      <div className="flex items-center gap-2 py-20 justify-center text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin" /> Loading client…
+      </div>
+    </AppShell>
+  );
+
+  if (isError || !res?.data) return (
+    <AppShell>
+      <div className="py-10 text-center text-muted-foreground">
+        Client not found. <Link to="/clients" className="text-primary">Back</Link>
+      </div>
+    </AppShell>
+  );
+
+  const client = res.data;
 
   return (
     <AppShell>
@@ -30,7 +49,6 @@ function ClientLayout() {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-xl font-semibold">{client.name}</h1>
-            <span className="text-xs px-2 py-0.5 bg-blue-50 text-blue-700 rounded">{client.type}</span>
           </div>
         </div>
       </div>
@@ -49,15 +67,12 @@ function ClientLayout() {
           <div className="bg-card rounded-lg border border-border p-4">
             <div className="flex items-center justify-between mb-2">
               <h3 className="font-semibold text-sm">Client Portal</h3>
-              <button className="text-xs text-primary">Done</button>
             </div>
             {client.portalStatus !== "none" ? (
               <div className="text-xs space-y-1.5">
                 <div className="text-foreground font-medium">{client.name}</div>
-                <div className="text-muted-foreground truncate">{client.portalEmail}</div>
-                <div className="text-muted-foreground">Invite sent {fmtDate(client.portalInviteSent)}</div>
+                <div className="text-muted-foreground truncate">{client.email}</div>
                 <div className="flex items-center justify-between pt-2">
-                  <button className="text-destructive text-xs">Remove access</button>
                   <button onClick={() => toast.success("Invite resent")} className="text-xs text-primary border border-border rounded px-2 py-1">Resend invite</button>
                 </div>
               </div>
@@ -68,7 +83,7 @@ function ClientLayout() {
             <div className="space-y-2.5 text-xs">
               <Field label="Full name" value={client.name} />
               <div>
-                <div className="text-muted-foreground uppercase text-[10px] font-semibold mb-0.5">Personal email</div>
+                <div className="text-muted-foreground uppercase text-[10px] font-semibold mb-0.5">Email</div>
                 <div className="flex items-center gap-1">
                   <Star className="w-3 h-3 text-amber-500" />
                   <a className="text-primary truncate flex-1" href={`mailto:${client.email}`}>{client.email || "—"}</a>
@@ -84,11 +99,9 @@ function ClientLayout() {
           <div className="bg-card rounded-lg border border-border p-4">
             <div className="flex items-center justify-between mb-2"><h3 className="font-semibold text-sm">About</h3><Pencil className="w-3.5 h-3.5 text-muted-foreground" /></div>
             <div className="space-y-2.5 text-xs">
-              <Field label="SSN/ITIN" value={client.ssn} />
-              <Field label="DOB" value={`${fmtDate(client.dob)}${age ? ` (age ${age})` : ""}`} />
-              <Field label="Occupation" value={client.occupation} />
-              <Field label="Client since" value={fmtDate(client.clientSince)} />
-              <Field label="Created on" value={fmtDate(client.createdOn)} />
+              <Field label="Occupation" value={client.occupation ?? ""} />
+              <Field label="Client since" value={fmtDate(client.clientSince ?? "")} />
+              <Field label="Created on" value={fmtDate(client.createdAt)} />
             </div>
           </div>
         </aside>

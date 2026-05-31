@@ -1,8 +1,9 @@
-import { Bell, Search } from "lucide-react";
+import { Bell, Search, LogOut } from "lucide-react";
 import { useRouterState } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { GlobalSearch } from "./GlobalSearch";
 import { useAppStore } from "@/store/useAppStore";
+import { useAuthStore } from "@/store/useAuthStore";
 
 const titles: Record<string, string> = {
   "/dashboard": "Dashboard", "/inbox": "Inbox", "/clients": "Client Portals", "/files": "Files",
@@ -15,6 +16,7 @@ export function TopBar() {
   const path = useRouterState({ select: (s) => s.location.pathname });
   const [open, setOpen] = useState(false);
   const clients = useAppStore((s) => s.clients);
+  const { user, logout } = useAuthStore();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -35,6 +37,8 @@ export function TopBar() {
     title = titles[key] || "Dashboard";
   }
 
+  const initials = user?.name?.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase() ?? "AM";
+
   return (
     <>
       <header className="h-14 bg-card border-b border-border flex items-center justify-between px-6 sticky top-0 z-20">
@@ -49,11 +53,14 @@ export function TopBar() {
             <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-destructive" />
           </button>
           <div className="flex items-center gap-2 pl-2 border-l border-border">
-            <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground font-semibold text-xs flex items-center justify-center">AM</div>
+            <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground font-semibold text-xs flex items-center justify-center">{initials}</div>
             <div className="text-sm hidden md:block">
-              <div className="font-medium text-foreground leading-tight">Angela Martin</div>
+              <div className="font-medium text-foreground leading-tight">{user?.name ?? "Angela Martin"}</div>
               <div className="text-muted-foreground text-xs leading-tight">Tax Advisor</div>
             </div>
+            <button onClick={logout} title="Sign out" className="ml-1 w-8 h-8 rounded-md hover:bg-muted flex items-center justify-center text-muted-foreground hover:text-foreground">
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </header>
