@@ -1,151 +1,501 @@
-// routes/admin.js — admin-only routes
+// routes/admin.js — admin-only routes (PostgreSQL async edition)
 const express = require("express");
 const db = require("../db");
-const { fail, ok, paged, formatTask, nowIso, hashPassword } = require("../helpers");
+const { fail, ok, paged, formatTask, formatUser, hashPassword, generateInviteToken, safeJson } = require("../helpers");
 const { requireAuth } = require("../middleware/auth");
+const { sendInviteEmail } = require("../config/aws");
+const env = require("../config/env");
+const { TASK_TYPES, WORKFLOWS, getWorkflow, getAllClientProgressValues } = require("../workflows");
+const { initializeSubtasks, advanceToSubtask, getSubtasks, getActivityLog } = require("../workflow-service");
+const { enrichTaskWithConfig, mergeConfigUpdate, getConfigSchemaForTaskType } = require("../config-fields");
+const { DOCUMENT_CATALOG, normalizeDocumentRequirements } = require("../document-requirements");
+
+const ADMIN_STATUSES = [
+  "On Hold", "Not to Do", "Data not received", "Partial Data received",
+  "Data Missing Closed", "Work in Progress", "Query sent to Support team",
+  "Query sent to client", "Partial Query received", "Review",
+  "Sent for Approval to support team", "Sent for Approval to client",
+  "Approval received", "Filed",
+];
 
 const router = express.Router();
 router.use(requireAuth("admin"));
 
-const ADMIN_STATUSES = [
-  "On Hold","Not to Do","Data not received","Partial Data received",
-  "Data Missing Closed","Work in Progress","Query sent to Support team",
-  "Query sent to client","Partial Query received","Review",
-  "Sent for Approval to support team","Sent for Approval to client",
-  "Approval received","Filed",
-];
+// ── Meta ──────────────────────────────────────────────────────────────────────
+const { getWorkflowMetadata } = require("../workflow-metadata");
 
-// GET /api/admin/meta/admin-statuses
-router.get("/meta/admin-statuses", (_, res) => res.json(ok(ADMIN_STATUSES, "Admin statuses fetched")));
-
-// ── Dashboard ──────────────────────────────────────────────────────────────────
-router.get("/dashboard", (_, res) => {
-  const totalClients = db.prepare("SELECT COUNT(*) as n FROM users WHERE role='client'").get().n;
-  const totalTasks   = db.prepare("SELECT COUNT(*) as n FROM tasks").get().n;
-  const pendingTasks = db.prepare("SELECT COUNT(*) as n FROM tasks WHERE status='pending'").get().n;
-  const completedTasks = db.prepare("SELECT COUNT(*) as n FROM tasks WHERE status='complete'").get().n;
-  const statusBreakdown = db.prepare("SELECT admin_status, COUNT(*) as count FROM tasks GROUP BY admin_status ORDER BY count DESC").all();
-  return res.json(ok({ totalClients, totalTasks, pendingTasks, completedTasks, statusBreakdown }, "Dashboard data fetched"));
+router.get("/meta/task-types", (_, res) => {
+  const types = Object.entries(WORKFLOWS).map(([key, wf]) => {
+    const meta = getWorkflowMetadata(key);
+    return {
+      key,
+      displayName: wf.displayName,
+      subtaskCount: wf.subtasks.length,
+      subtasks: wf.subtasks,
+      configFields: wf.configFields,
+      configSchema: getConfigSchemaForTaskType(key),
+      subDetails: {
+        generation:     meta.generation,
+        subtaskWorkflow: meta.subtaskWorkflow,
+        relatedTasks:   meta.relatedTasks,
+        progressMilestones: meta.progressMilestones,
+      },
+    };
+  });
+  return res.json(ok(types, "Task types fetched"));
 });
 
-// ── Clients ────────────────────────────────────────────────────────────────────
-router.get("/clients", (req, res) => {
-  const page = Math.max(1, Number(req.query.page || 1));
+router.get("/meta/client-progress-values", (_, res) =>
+  res.json(ok(getAllClientProgressValues(), "Client progress values fetched"))
+);
+
+router.get("/meta/document-types", (_, res) => {
+  const sales = DOCUMENT_CATALOG.filter((d) => d.group === "sales");
+  const general = DOCUMENT_CATALOG.filter((d) => d.group !== "sales");
+  return res.json(ok({
+    general,
+    sales: { label: "Sales", items: sales },
+    all: DOCUMENT_CATALOG,
+  }, "Document types catalog"));
+});
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+router.get("/dashboard", async (_, res) => {
+  const [counts, breakdown] = await Promise.all([
+    db.query(`
+      SELECT
+        (SELECT COUNT(*) FROM users WHERE role='client')::int AS total_clients,
+        (SELECT COUNT(*) FROM tasks)::int                     AS total_tasks,
+        (SELECT COUNT(*) FROM tasks WHERE status='pending')::int  AS pending_tasks,
+        (SELECT COUNT(*) FROM tasks WHERE status='complete')::int AS completed_tasks
+    `),
+    db.query(`
+      SELECT admin_status, COUNT(*)::int AS count
+      FROM tasks
+      GROUP BY admin_status
+      ORDER BY count DESC
+    `),
+  ]);
+
+  const { total_clients, total_tasks, pending_tasks, completed_tasks } = counts.rows[0];
+  return res.json(ok({
+    totalClients:   total_clients,
+    totalTasks:     total_tasks,
+    pendingTasks:   pending_tasks,
+    completedTasks: completed_tasks,
+    statusBreakdown: breakdown.rows.map((r) => ({ adminStatus: r.admin_status, count: r.count })),
+  }, "Dashboard data fetched"));
+});
+
+// ── Clients ───────────────────────────────────────────────────────────────────
+router.get("/clients", async (req, res) => {
+  const page     = Math.max(1, Number(req.query.page     || 1));
   const per_page = Math.max(1, Number(req.query.per_page || 20));
-  const search = req.query.search || "";
-  const like = `%${search}%`;
-  const offset = (page - 1) * per_page;
-  const rows = db.prepare("SELECT id,email,name,phone,occupation,client_since,portal_status,created_at FROM users WHERE role='client' AND (name LIKE ? OR email LIKE ?) ORDER BY name ASC LIMIT ? OFFSET ?").all(like,like,per_page,offset);
-  const { total } = db.prepare("SELECT COUNT(*) as total FROM users WHERE role='client' AND (name LIKE ? OR email LIKE ?)").get(like,like);
-  return res.json(paged(rows.map(r=>({id:r.id,email:r.email,name:r.name,phone:r.phone,occupation:r.occupation,clientSince:r.client_since,portalStatus:r.portal_status,createdAt:r.created_at})), "Clients fetched", page, per_page, total));
+  const search   = req.query.search || "";
+  const offset   = (page - 1) * per_page;
+  const like     = `%${search}%`;
+
+  const [{ rows }, { rows: cnt }] = await Promise.all([
+    db.query(
+      `SELECT id,email,name,phone,occupation,client_since,portal_status,created_at
+       FROM users WHERE role='client' AND (name ILIKE $1 OR email ILIKE $2)
+       ORDER BY name ASC LIMIT $3 OFFSET $4`,
+      [like, like, per_page, offset]
+    ),
+    db.query(
+      "SELECT COUNT(*)::int AS total FROM users WHERE role='client' AND (name ILIKE $1 OR email ILIKE $2)",
+      [like, like]
+    ),
+  ]);
+
+  return res.json(paged(
+    rows.map((r) => ({
+      id:           r.id,
+      email:        r.email,
+      name:         r.name,
+      phone:        r.phone,
+      occupation:   r.occupation,
+      clientSince:  r.client_since,
+      portalStatus: r.portal_status,
+      createdAt:    r.created_at,
+    })),
+    "Clients fetched", page, per_page, cnt[0].total
+  ));
 });
 
-router.get("/clients/:clientId", (req, res) => {
-  const row = db.prepare("SELECT id,email,name,phone,ssn,dob,occupation,client_since,portal_status,created_at FROM users WHERE id=? AND role='client'").get(req.params.clientId);
-  if (!row) return res.status(404).json(fail("Client not found"));
-  return res.json(ok({ id:row.id,email:row.email,name:row.name,phone:row.phone,ssn:row.ssn,dob:row.dob,occupation:row.occupation,clientSince:row.client_since,portalStatus:row.portal_status,createdAt:row.created_at },"Client fetched"));
+router.get("/clients/:clientId", async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT id,email,name,phone,ssn,dob,occupation,client_since,portal_status,must_change_password,created_at
+     FROM users WHERE (id::text=$1 OR slug=$1) AND role='client'`,
+    [req.params.clientId]
+  );
+  if (!rows[0]) return res.status(404).json(fail("Client not found"));
+  const r = rows[0];
+  return res.json(ok({
+    id:                 r.id,
+    email:              r.email,
+    name:               r.name,
+    phone:              r.phone,
+    ssn:                r.ssn,
+    dob:                r.dob,
+    occupation:         r.occupation,
+    clientSince:        r.client_since,
+    portalStatus:       r.portal_status,
+    mustChangePassword: r.must_change_password,
+    createdAt:          r.created_at,
+  }, "Client fetched"));
 });
 
-router.post("/clients", (req, res) => {
+// POST /api/admin/clients — create client + send invite email
+router.post("/clients", async (req, res) => {
   const b = req.body;
   if (!b.email || !b.name) return res.status(400).json(fail("email and name are required"));
-  if (db.prepare("SELECT id FROM users WHERE email=?").get(b.email)) return res.status(409).json(fail("Email already in use"));
-  const id = `client-${Date.now()}`;
-  const now = nowIso();
-  db.prepare("INSERT INTO users (id,email,password_hash,name,role,phone,ssn,dob,occupation,client_since,portal_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
-    .run(id,b.email,hashPassword(b.password||"client123"),b.name,"client",b.phone||null,b.ssn||null,b.dob||null,b.occupation||null,now.split("T")[0],"active",now,now);
-  const row = db.prepare("SELECT id,email,name,phone,portal_status,created_at FROM users WHERE id=?").get(id);
-  return res.status(201).json(ok({id:row.id,email:row.email,name:row.name,phone:row.phone,portalStatus:row.portal_status,createdAt:row.created_at,temporaryPassword:b.password||"client123"},"Client created"));
+
+  const { rows: ex } = await db.query("SELECT id FROM users WHERE email=$1", [b.email]);
+  if (ex.length > 0) return res.status(409).json(fail("Email already in use"));
+
+  // Create user with a random temp password (they'll set it via invite)
+  const tempHash = await hashPassword(require("crypto").randomBytes(24).toString("hex"));
+  const now = new Date().toISOString().split("T")[0];
+
+  const { rows: [user] } = await db.query(
+    `INSERT INTO users
+       (email, password_hash, name, role, phone, occupation, client_since, portal_status, must_change_password)
+     VALUES ($1,$2,$3,'client',$4,$5,$6,'pending',TRUE)
+     RETURNING id,email,name,phone,portal_status,created_at`,
+    [b.email, tempHash, b.name, b.phone || null, b.occupation || null, now]
+  );
+
+  // Generate invite token (7 day expiry)
+  const token = generateInviteToken();
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  await db.query(
+    "INSERT INTO invite_tokens (user_id, token, expires_at, created_by) VALUES ($1,$2,$3,$4)",
+    [user.id, token, expiresAt, req.user.sub]
+  );
+
+  const inviteUrl = `${env.FRONTEND_URL}/invite/${token}`;
+  await sendInviteEmail({ toEmail: user.email, toName: user.name, inviteUrl });
+
+  return res.status(201).json(ok({
+    id:              user.id,
+    email:           user.email,
+    name:            user.name,
+    phone:           user.phone,
+    portalStatus:    user.portal_status,
+    createdAt:       user.created_at,
+    inviteSent:      true,
+    inviteExpiresAt: expiresAt,
+  }, "Client created and invite sent"));
 });
 
-router.patch("/clients/:clientId", (req, res) => {
-  if (!db.prepare("SELECT id FROM users WHERE id=? AND role='client'").get(req.params.clientId)) return res.status(404).json(fail("Client not found"));
+// POST /api/admin/clients/:clientId/resend-invite
+router.post("/clients/:clientId/resend-invite", async (req, res) => {
+  const { rows } = await db.query(
+    "SELECT * FROM users WHERE (id::text=$1 OR slug=$1) AND role='client'",
+    [req.params.clientId]
+  );
+  if (!rows[0]) return res.status(404).json(fail("Client not found"));
+  const user = rows[0];
+
+  // Expire all existing unused tokens
+  await db.query(
+    "UPDATE invite_tokens SET used_at=NOW() WHERE user_id=$1 AND used_at IS NULL",
+    [user.id]
+  );
+
+  const token = generateInviteToken();
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  await db.query(
+    "INSERT INTO invite_tokens (user_id, token, expires_at, created_by) VALUES ($1,$2,$3,$4)",
+    [user.id, token, expiresAt, req.user.sub]
+  );
+
+  const inviteUrl = `${env.FRONTEND_URL}/invite/${token}`;
+  await sendInviteEmail({ toEmail: user.email, toName: user.name, inviteUrl });
+
+  return res.json(ok({ inviteExpiresAt: expiresAt }, "Invite resent"));
+});
+
+router.patch("/clients/:clientId", async (req, res) => {
+  const { rows } = await db.query(
+    "SELECT id FROM users WHERE (id::text=$1 OR slug=$1) AND role='client'",
+    [req.params.clientId]
+  );
+  if (!rows[0]) return res.status(404).json(fail("Client not found"));
+  const userId = rows[0].id;
+
   const b = req.body;
-  const now = nowIso();
-  const map = { name:"name",phone:"phone",occupation:"occupation",ssn:"ssn",dob:"dob",portalStatus:"portal_status" };
-  const sets=["updated_at=?"]; const vals=[now];
-  for(const[k,v]of Object.entries(map)){if(k in b){sets.push(`${v}=?`);vals.push(b[k]);}}
-  vals.push(req.params.clientId);
-  db.prepare(`UPDATE users SET ${sets.join(",")} WHERE id=?`).run(...vals);
-  return res.json(ok({ id:req.params.clientId,updatedAt:now },"Client updated"));
-});
-
-router.delete("/clients/:clientId", (req, res) => {
-  if (!db.prepare("SELECT id FROM users WHERE id=? AND role='client'").get(req.params.clientId)) return res.status(404).json(fail("Client not found"));
-  db.prepare("DELETE FROM users WHERE id=?").run(req.params.clientId);
-  return res.json(ok({ id:req.params.clientId,deletedAt:nowIso() },"Client deleted"));
-});
-
-// ── Tasks — Admin management ───────────────────────────────────────────────────
-router.get("/tasks", (req, res) => {
-  const { clientId, adminStatus, status, page:p=1, per_page:pp=20 } = req.query;
-  const page = Math.max(1,Number(p)); const per_page = Math.max(1,Number(pp));
-  const offset = (page-1)*per_page;
-  const conds=[]; const args=[];
-  if(clientId){conds.push("t.client_id=?");args.push(clientId);}
-  if(adminStatus){conds.push("t.admin_status=?");args.push(adminStatus);}
-  if(status){conds.push("t.status=?");args.push(status);}
-  const where = conds.length ? "WHERE "+conds.join(" AND "):"";
-  const rows = db.prepare(`SELECT t.*,u.name as client_name,u.email as client_email FROM tasks t JOIN users u ON t.client_id=u.id ${where} ORDER BY t.created_at DESC LIMIT ? OFFSET ?`).all(...args,per_page,offset);
-  const { total } = db.prepare(`SELECT COUNT(*) as total FROM tasks t ${where}`).get(...args);
-  return res.json(paged(rows.map(r=>({...formatTask(r),clientName:r.client_name,clientEmail:r.client_email})),"Tasks fetched",page,per_page,total));
-});
-
-router.get("/clients/:clientId/tasks", (req, res) => {
-  const rows = db.prepare("SELECT * FROM tasks WHERE client_id=? ORDER BY created_at DESC").all(req.params.clientId);
-  return res.json(ok(rows.map(formatTask),"Client tasks fetched"));
-});
-
-router.post("/clients/:clientId/tasks", (req, res) => {
-  const adminId = req.user.sub;
-  if (!db.prepare("SELECT id FROM users WHERE id=? AND role='client'").get(req.params.clientId)) return res.status(404).json(fail("Client not found"));
-  const b = req.body;
-  if (!b.title) return res.status(400).json(fail("title is required"));
-  const adminStatus = b.adminStatus || "Data not received";
-  if (!ADMIN_STATUSES.includes(adminStatus)) return res.status(400).json(fail(`Invalid adminStatus. Allowed: ${ADMIN_STATUSES.join(", ")}`));
-  const id = `task-${req.params.clientId.slice(0,8)}-${Date.now()}`;
-  const now = nowIso();
-  db.prepare("INSERT INTO tasks (id,client_id,assigned_by,title,description,status,admin_status,task_type,metadata,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
-    .run(id,req.params.clientId,adminId,b.title,b.description||null,"pending",adminStatus,b.taskType||"info",JSON.stringify(b.metadata||{}),now,now);
-  return res.status(201).json(ok(formatTask(db.prepare("SELECT * FROM tasks WHERE id=?").get(id)),"Task assigned to client"));
-});
-
-router.patch("/tasks/:taskId", (req, res) => {
-  if (!db.prepare("SELECT id FROM tasks WHERE id=?").get(req.params.taskId)) return res.status(404).json(fail("Task not found"));
-  const b = req.body;
-  if (b.adminStatus && !ADMIN_STATUSES.includes(b.adminStatus)) return res.status(400).json(fail(`Invalid adminStatus. Allowed: ${ADMIN_STATUSES.join(", ")}`));
-  const now = nowIso();
-  const sets=["updated_at=?"]; const vals=[now];
-  if("adminStatus" in b){sets.push("admin_status=?");vals.push(b.adminStatus);}
-  if("title" in b){sets.push("title=?");vals.push(b.title);}
-  if("description" in b){sets.push("description=?");vals.push(b.description);}
-  if("metadata" in b){sets.push("metadata=?");vals.push(JSON.stringify(b.metadata));}
-  if("status" in b){sets.push("status=?");vals.push(b.status);}
-  vals.push(req.params.taskId);
-  db.prepare(`UPDATE tasks SET ${sets.join(",")} WHERE id=?`).run(...vals);
-  return res.json(ok(formatTask(db.prepare("SELECT * FROM tasks WHERE id=?").get(req.params.taskId)),"Task updated"));
-});
-
-router.delete("/tasks/:taskId", (req, res) => {
-  if (!db.prepare("SELECT id FROM tasks WHERE id=?").get(req.params.taskId)) return res.status(404).json(fail("Task not found"));
-  db.prepare("DELETE FROM tasks WHERE id=?").run(req.params.taskId);
-  return res.json(ok({ id:req.params.taskId,deletedAt:nowIso() },"Task deleted"));
-});
-
-// POST /api/admin/tasks/:taskId/query-sheet — set Excel rows for a sheet_remarks task
-router.post("/tasks/:taskId/query-sheet", (req, res) => {
-  const task = db.prepare("SELECT * FROM tasks WHERE id=?").get(req.params.taskId);
-  if (!task) return res.status(404).json(fail("Task not found"));
-  const { rows, downloadUrl } = req.body;
-  if (!Array.isArray(rows) || !rows.length) return res.status(400).json(fail("rows array is required"));
-  const upsert = db.prepare(`INSERT INTO query_sheet_rows (task_id,row_index,date,details,payment,receipt,hst,our_remarks,client_remarks) VALUES (?,?,?,?,?,?,?,?,'') ON CONFLICT(task_id,row_index) DO UPDATE SET date=excluded.date,details=excluded.details,payment=excluded.payment,receipt=excluded.receipt,hst=excluded.hst,our_remarks=excluded.our_remarks,updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')`);
-  rows.forEach(r => upsert.run(req.params.taskId,r.rowIndex,r.date||null,r.details||null,r.payment||null,r.receipt||null,r.hst||null,r.ourRemarks||null));
-  if (downloadUrl) {
-    const meta = JSON.parse(task.metadata || "{}");
-    meta.downloadUrl = downloadUrl;
-    db.prepare("UPDATE tasks SET metadata=?,updated_at=? WHERE id=?").run(JSON.stringify(meta),nowIso(),req.params.taskId);
+  const fieldMap = { name:"name", phone:"phone", occupation:"occupation", ssn:"ssn", dob:"dob", portalStatus:"portal_status" };
+  const sets = ["updated_at=NOW()"]; const vals = [];
+  let i = 1;
+  for (const [camel, snake] of Object.entries(fieldMap)) {
+    if (camel in b) { sets.push(`${snake}=$${i++}`); vals.push(b[camel]); }
   }
-  return res.json(ok({ taskId:req.params.taskId,rowsUploaded:rows.length },"Query sheet rows set"));
+  vals.push(userId);
+  await db.query(`UPDATE users SET ${sets.join(",")} WHERE id=$${i}`, vals);
+  return res.json(ok({ id: userId, updatedAt: new Date().toISOString() }, "Client updated"));
+});
+
+router.delete("/clients/:clientId", async (req, res) => {
+  const { rows } = await db.query(
+    "SELECT id FROM users WHERE (id::text=$1 OR slug=$1) AND role='client'",
+    [req.params.clientId]
+  );
+  if (!rows[0]) return res.status(404).json(fail("Client not found"));
+  await db.query("DELETE FROM users WHERE id=$1", [rows[0].id]);
+  return res.json(ok({ id: rows[0].id, deletedAt: new Date().toISOString() }, "Client deleted"));
+});
+
+// ── Tasks — Admin management ──────────────────────────────────────────────────
+router.get("/tasks", async (req, res) => {
+  const { clientId, adminStatus, status, taskType, clientProgress } = req.query;
+  const page     = Math.max(1, Number(req.query.page     || 1));
+  const per_page = Math.max(1, Number(req.query.per_page || 20));
+  const offset   = (page - 1) * per_page;
+
+  const conds = []; const args = [];
+  let i = 1;
+  if (clientId)       { conds.push(`t.client_id=$${i++}`);       args.push(clientId); }
+  if (adminStatus)    { conds.push(`t.admin_status=$${i++}`);    args.push(adminStatus); }
+  if (status)         { conds.push(`t.status=$${i++}`);          args.push(status); }
+  if (taskType)       { conds.push(`t.task_type=$${i++}`);       args.push(taskType); }
+  if (clientProgress) { conds.push(`t.client_progress=$${i++}`); args.push(clientProgress); }
+
+  const where = conds.length ? "WHERE " + conds.join(" AND ") : "";
+
+  const [{ rows }, { rows: cnt }] = await Promise.all([
+    db.query(
+      `SELECT t.*, u.name AS client_name, u.email AS client_email
+       FROM tasks t JOIN users u ON t.client_id=u.id
+       ${where} ORDER BY t.created_at DESC LIMIT $${i++} OFFSET $${i++}`,
+      [...args, per_page, offset]
+    ),
+    db.query(
+      `SELECT COUNT(*)::int AS total FROM tasks t ${where}`,
+      args
+    ),
+  ]);
+
+  return res.json(paged(
+    rows.map((r) => ({ ...formatTask(r), clientName: r.client_name, clientEmail: r.client_email })),
+    "Tasks fetched", page, per_page, cnt[0].total
+  ));
+});
+
+router.get("/clients/:clientId/tasks", async (req, res) => {
+  const { rows: [client] } = await db.query(
+    "SELECT id FROM users WHERE (id::text=$1 OR slug=$1) AND role='client'",
+    [req.params.clientId]
+  );
+  if (!client) return res.status(404).json(fail("Client not found"));
+
+  const { rows } = await db.query(
+    "SELECT * FROM tasks WHERE client_id=$1 ORDER BY created_at DESC",
+    [client.id]
+  );
+  return res.json(ok(rows.map(formatTask), "Client tasks fetched"));
+});
+
+router.post("/clients/:clientId/tasks", async (req, res) => {
+  const { rows: [client] } = await db.query(
+    "SELECT id FROM users WHERE (id::text=$1 OR slug=$1) AND role='client'",
+    [req.params.clientId]
+  );
+  if (!client) return res.status(404).json(fail("Client not found"));
+
+  const b = req.body;
+  const taskType = b.taskType || "info";
+
+  // Workflow types get subtasks; legacy types (onboarding_form, info, etc.) are allowed too
+  const wf = getWorkflow(taskType);
+
+  const title = b.title || (wf ? wf.displayName : null);
+  if (!title) return res.status(400).json(fail("title is required (or provide a valid workflow taskType)"));
+
+  const metadata = { ...(b.metadata || {}) };
+  if (b.documentRequirements) {
+    metadata.documentRequirements = normalizeDocumentRequirements(b.documentRequirements);
+  }
+
+  const adminStatus = b.adminStatus && ADMIN_STATUSES.includes(b.adminStatus)
+    ? b.adminStatus
+    : "Data not received";
+
+  const { rows: [task] } = await db.query(
+    `INSERT INTO tasks
+       (client_id, assigned_by, template_id, template_version_id,
+        title, description, task_type, admin_status, metadata, config,
+        tax_year, due_date, open_date)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     RETURNING *`,
+    [
+      client.id, req.user.sub,
+      b.templateId || null, b.templateVersionId || null,
+      title, b.description || null,
+      taskType,
+      adminStatus,
+      JSON.stringify(metadata),
+      b.config ? JSON.stringify(b.config) : "{}",
+      b.taxYear || null, b.dueDate || null, b.openDate || null,
+    ]
+  );
+
+  // If this is a workflow task type, create subtask rows and set initial state
+  if (wf) {
+    await initializeSubtasks(task.id, taskType);
+    const { rows: [refreshed] } = await db.query("SELECT * FROM tasks WHERE id=$1", [task.id]);
+    return res.status(201).json(ok({
+      ...formatTask(refreshed),
+      ...enrichTaskWithConfig(refreshed, safeJson(refreshed.config, {})),
+    }, "Task created with workflow"));
+  }
+
+  return res.status(201).json(ok({
+    ...formatTask(task),
+    ...enrichTaskWithConfig(task, safeJson(task.config, {})),
+  }, "Task assigned to client"));
+});
+
+router.patch("/tasks/:taskId", async (req, res) => {
+  const { rows: [existing] } = await db.query("SELECT * FROM tasks WHERE id=$1", [req.params.taskId]);
+  if (!existing) return res.status(404).json(fail("Task not found"));
+
+  const b = req.body;
+  if (b.adminStatus && !ADMIN_STATUSES.includes(b.adminStatus)) {
+    return res.status(400).json(fail(`Invalid adminStatus`));
+  }
+
+  const sets = ["updated_at=NOW()"]; const vals = []; let i = 1;
+  const map = {
+    adminStatus: "admin_status", title: "title", description: "description",
+    status: "status", metadata: "metadata",
+  };
+  for (const [camel, snake] of Object.entries(map)) {
+    if (camel in b) {
+      sets.push(`${snake}=$${i++}`);
+      vals.push(camel === "metadata" ? JSON.stringify(b[camel]) : b[camel]);
+    }
+  }
+  if ("config" in b) {
+    sets.push(`config=$${i++}`);
+    vals.push(JSON.stringify(mergeConfigUpdate(
+      existing.task_type, safeJson(existing.config, {}), b.config
+    )));
+  }
+  if ("documentRequirements" in b || b.metadata) {
+    const curMeta = safeJson(existing.metadata, {});
+    const newMeta = { ...curMeta, ...(b.metadata || {}) };
+    if ("documentRequirements" in b) {
+      newMeta.documentRequirements = normalizeDocumentRequirements(b.documentRequirements);
+    }
+    sets.push(`metadata=$${i++}`);
+    vals.push(JSON.stringify(newMeta));
+  }
+  vals.push(req.params.taskId);
+  const { rows: [updated] } = await db.query(
+    `UPDATE tasks SET ${sets.join(",")} WHERE id=$${i} RETURNING *`,
+    vals
+  );
+  return res.json(ok({
+    ...formatTask(updated),
+    ...enrichTaskWithConfig(updated, safeJson(updated.config, {})),
+  }, "Task updated"));
+});
+
+router.patch("/tasks/:taskId/reassign", async (req, res) => {
+  const { clientId } = req.body;
+  if (!clientId) return res.status(400).json(fail("clientId is required"));
+
+  const [{ rows: [task] }, { rows: [client] }] = await Promise.all([
+    db.query("SELECT id FROM tasks WHERE id=$1", [req.params.taskId]),
+    db.query("SELECT id FROM users WHERE (id::text=$1 OR slug=$1) AND role='client'", [clientId]),
+  ]);
+  if (!task)   return res.status(404).json(fail("Task not found"));
+  if (!client) return res.status(404).json(fail("Target client not found"));
+
+  const { rows: [updated] } = await db.query(
+    "UPDATE tasks SET client_id=$1, updated_at=NOW() WHERE id=$2 RETURNING *",
+    [client.id, task.id]
+  );
+  return res.json(ok(formatTask(updated), "Task reassigned"));
+});
+
+router.delete("/tasks/:taskId", async (req, res) => {
+  const { rows: [task] } = await db.query("SELECT id FROM tasks WHERE id=$1", [req.params.taskId]);
+  if (!task) return res.status(404).json(fail("Task not found"));
+  await db.query("DELETE FROM tasks WHERE id=$1", [task.id]);
+  return res.json(ok({ id: task.id, deletedAt: new Date().toISOString() }, "Task deleted"));
+});
+
+// ── Subtask workflow endpoints ────────────────────────────────────────────────
+
+// PATCH /api/admin/tasks/:taskId/subtask — advance to a specific subtask
+router.patch("/tasks/:taskId/subtask", async (req, res) => {
+  const { subtaskName } = req.body;
+  if (!subtaskName) return res.status(400).json(fail("subtaskName is required"));
+
+  try {
+    const result = await advanceToSubtask(req.params.taskId, subtaskName, req.user.sub);
+    return res.json(ok(result, "Subtask advanced"));
+  } catch (err) {
+    return res.status(400).json(fail(err.message));
+  }
+});
+
+// GET /api/admin/tasks/:taskId/subtasks — list all subtasks (admin view)
+router.get("/tasks/:taskId/subtasks", async (req, res) => {
+  const { rows: [task] } = await db.query("SELECT id, task_type FROM tasks WHERE id=$1", [req.params.taskId]);
+  if (!task) return res.status(404).json(fail("Task not found"));
+
+  const subtasks = await getSubtasks(task.id);
+  const wf = task.task_type ? getWorkflow(task.task_type) : null;
+
+  return res.json(ok({
+    taskId:   task.id,
+    taskType: task.task_type,
+    workflow: wf ? wf.displayName : null,
+    subtasks,
+  }, "Subtasks fetched"));
+});
+
+// GET /api/admin/tasks/:taskId/activity — activity log
+router.get("/tasks/:taskId/activity", async (req, res) => {
+  const { rows: [task] } = await db.query("SELECT id FROM tasks WHERE id=$1", [req.params.taskId]);
+  if (!task) return res.status(404).json(fail("Task not found"));
+
+  const log = await getActivityLog(task.id);
+  return res.json(ok(log, "Activity log fetched"));
+});
+
+// POST /api/admin/tasks/:taskId/query-sheet — set Excel rows
+router.post("/tasks/:taskId/query-sheet", async (req, res) => {
+  const { rows: [task] } = await db.query("SELECT * FROM tasks WHERE id=$1", [req.params.taskId]);
+  if (!task) return res.status(404).json(fail("Task not found"));
+
+  const { rows: rowsData, downloadUrl } = req.body;
+  if (!Array.isArray(rowsData) || !rowsData.length) {
+    return res.status(400).json(fail("rows array is required"));
+  }
+
+  for (const r of rowsData) {
+    await db.query(
+      `INSERT INTO query_sheet_rows
+         (task_id, row_index, date, details, payment, receipt, hst, our_remarks)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (task_id, row_index) DO UPDATE
+         SET date=$3, details=$4, payment=$5, receipt=$6, hst=$7, our_remarks=$8, updated_at=NOW()`,
+      [task.id, r.rowIndex, r.date||null, r.details||null, r.payment||null, r.receipt||null, r.hst||null, r.ourRemarks||null]
+    );
+  }
+
+  if (downloadUrl) {
+    const meta = { ...(task.metadata || {}), downloadUrl };
+    await db.query("UPDATE tasks SET metadata=$1, updated_at=NOW() WHERE id=$2", [meta, task.id]);
+  }
+
+  return res.json(ok({ taskId: task.id, rowsUploaded: rowsData.length }, "Query sheet rows set"));
 });
 
 module.exports = router;

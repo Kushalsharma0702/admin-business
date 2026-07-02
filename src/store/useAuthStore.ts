@@ -37,9 +37,9 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     if (isBrowser) {
       localStorage.removeItem("taxease_token");
       localStorage.removeItem("taxease_user");
+      window.location.href = "/login";
     }
     set({ token: null, user: null });
-    window.location.href = "/login";
   },
 
   isAuthenticated: () => !!get().token,

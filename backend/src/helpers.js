@@ -1,11 +1,11 @@
-// helpers.js — shared utilities
+// helpers.js — shared utilities (PostgreSQL + async edition)
+const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
+
+// ── Response envelopes ────────────────────────────────────────────────────────
 
 function ok(data, message = "Success", extra = {}) {
   return { success: true, message, data, ...extra };
-}
-function created(data, message = "Created") {
-  return { success: true, message, data };
 }
 function fail(message, errors) {
   return { success: false, message, ...(errors ? { errors } : {}) };
@@ -13,64 +13,180 @@ function fail(message, errors) {
 function paged(data, message, page, per_page, total_items) {
   return {
     success: true, message, data,
-    pagination: { page, per_page, total_items, total_pages: Math.ceil(total_items / per_page) },
+    pagination: {
+      page,
+      per_page,
+      total_items,
+      total_pages: Math.ceil(total_items / per_page),
+    },
   };
 }
+
+// ── Password hashing (bcrypt) ─────────────────────────────────────────────────
+
+async function hashPassword(plain) {
+  return bcrypt.hash(plain, 12);
+}
+async function verifyPassword(plain, hash) {
+  return bcrypt.compare(plain, hash);
+}
+
+// ── Invite token generation ───────────────────────────────────────────────────
+
+function generateInviteToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+// ── Row formatters (camelCase output) ─────────────────────────────────────────
 
 function formatTask(row) {
   if (!row) return null;
   return {
-    id: row.id, clientId: row.client_id, assignedBy: row.assigned_by ?? null,
-    title: row.title, description: row.description ?? null,
-    status: row.status, adminStatus: row.admin_status,
-    taskType: row.task_type ?? null,
-    metadata: safeJson(row.metadata, {}),
-    completionNote: row.completion_note ?? null,
-    completedAt: row.completed_at ?? null,
-    createdAt: row.created_at, updatedAt: row.updated_at,
+    id:                row.id,
+    clientId:          row.client_id,
+    assignedBy:        row.assigned_by ?? null,
+    templateId:        row.template_id ?? null,
+    templateVersionId: row.template_version_id ?? null,
+    title:             row.title,
+    description:       row.description ?? null,
+    status:            row.status,
+    adminStatus:       row.admin_status,
+    taskType:          row.task_type ?? null,
+    currentSubtask:    row.current_subtask ?? null,
+    clientProgress:    row.client_progress ?? null,
+    dueDate:           row.due_date ?? null,
+    openDate:          row.open_date ?? null,
+    taxYear:           row.tax_year ?? null,
+    config:            row.config ?? {},
+    metadata:          row.metadata ?? {},
+    completionNote:    row.completion_note ?? null,
+    completedAt:       row.completed_at ?? null,
+    createdAt:         row.created_at,
+    updatedAt:         row.updated_at,
+  };
+}
+
+function formatUser(row) {
+  if (!row) return null;
+  return {
+    id:                 row.id,
+    email:              row.email,
+    name:               row.name,
+    role:               row.role,
+    phone:              row.phone ?? null,
+    ssn:                row.ssn ?? null,
+    dob:                row.dob ?? null,
+    occupation:         row.occupation ?? null,
+    clientSince:        row.client_since ?? null,
+    portalStatus:       row.portal_status,
+    mustChangePassword: row.must_change_password ?? false,
+    createdAt:          row.created_at,
+    updatedAt:          row.updated_at,
   };
 }
 
 function formatEmployee(row) {
   if (!row) return null;
   return {
-    id: row.id, name: row.name, email: row.email ?? null,
-    firstName: row.first_name ?? null, lastName: row.last_name ?? null,
-    middleName: row.middle_name ?? null, dateOfBirth: row.date_of_birth ?? null,
-    gender: row.gender ?? null, phone: row.phone ?? null, sin: row.sin ?? null,
-    addressLine1: row.address_line_1 ?? null, addressLine2: row.address_line_2 ?? null,
-    city: row.city ?? null, country: row.country ?? null,
-    provinceState: row.province_state ?? null, postalCode: row.postal_code ?? null,
-    startDate: row.start_date ?? null, position: row.position ?? null,
-    department: row.department ?? null,
-    hourlyRate: row.hourly_rate ?? null, federalTaxCredit: row.federal_tax_credit ?? null,
-    provincialTaxCredit: row.provincial_tax_credit ?? null, salary: row.salary ?? null,
-    metadata: safeJson(row.metadata, {}),
-    createdAt: row.created_at, updatedAt: row.updated_at,
+    id:                   row.id,
+    name:                 row.name,
+    email:                row.email ?? null,
+    firstName:            row.first_name ?? null,
+    lastName:             row.last_name ?? null,
+    middleName:           row.middle_name ?? null,
+    dateOfBirth:          row.date_of_birth ?? null,
+    gender:               row.gender ?? null,
+    phone:                row.phone ?? null,
+    sin:                  row.sin ?? null,
+    addressLine1:         row.address_line_1 ?? null,
+    addressLine2:         row.address_line_2 ?? null,
+    city:                 row.city ?? null,
+    country:              row.country ?? null,
+    provinceState:        row.province_state ?? null,
+    postalCode:           row.postal_code ?? null,
+    startDate:            row.start_date ?? null,
+    position:             row.position ?? null,
+    department:           row.department ?? null,
+    hourlyRate:           row.hourly_rate ?? null,
+    federalTaxCredit:     row.federal_tax_credit ?? null,
+    provincialTaxCredit:  row.provincial_tax_credit ?? null,
+    salary:               row.salary ?? null,
+    metadata:             row.metadata ?? {},
+    createdAt:            row.created_at,
+    updatedAt:            row.updated_at,
   };
 }
 
 function formatEntry(row) {
   if (!row) return null;
   return {
-    id: row.id, periodLabel: row.period_label,
-    periodStart: row.period_start, periodEnd: row.period_end,
-    status: row.status,
-    employeeIds: safeJson(row.employee_ids, []),
-    totalAmount: row.total_amount ?? null,
-    notes: row.notes ?? "",
-    documentPaths: safeJson(row.document_paths, []),
-    metadata: safeJson(row.metadata, { employeeRows: [] }),
-    isAutoGenerated: row.is_auto_generated === 1,
-    createdAt: row.created_at, updatedAt: row.updated_at,
-    submittedAt: row.submitted_at ?? null,
+    id:               row.id,
+    periodLabel:      row.period_label,
+    periodStart:      row.period_start,
+    periodEnd:        row.period_end,
+    status:           row.status,
+    employeeIds:      row.employee_ids ?? [],
+    totalAmount:      row.total_amount ?? null,
+    notes:            row.notes ?? "",
+    documentPaths:    row.document_paths ?? [],
+    metadata:         row.metadata ?? { employeeRows: [] },
+    isAutoGenerated:  row.is_auto_generated ?? false,
+    createdAt:        row.created_at,
+    updatedAt:        row.updated_at,
+    submittedAt:      row.submitted_at ?? null,
   };
 }
 
-function safeJson(raw, fallback) {
-  if (!raw) return fallback;
-  try { return JSON.parse(raw); } catch { return fallback; }
+function formatTemplate(row) {
+  if (!row) return null;
+  return {
+    id:           row.id,
+    name:         row.name,
+    description:  row.description ?? null,
+    taskType:     row.task_type,
+    category:     row.category ?? null,
+    isActive:     row.is_active,
+    createdBy:    row.created_by ?? null,
+    latestVersion: row.latest_version ?? null,
+    createdAt:    row.created_at,
+    updatedAt:    row.updated_at,
+  };
 }
+
+function formatTemplateVersion(row) {
+  if (!row) return null;
+  return {
+    id:          row.id,
+    templateId:  row.template_id,
+    version:     row.version,
+    formSchema:  row.form_schema ?? [],
+    isPublished: row.is_published,
+    publishedAt: row.published_at ?? null,
+    createdBy:   row.created_by ?? null,
+    createdAt:   row.created_at,
+  };
+}
+
+function formatSubmission(row) {
+  if (!row) return null;
+  return {
+    id:                 row.id,
+    taskId:             row.task_id,
+    clientId:           row.client_id,
+    templateVersionId:  row.template_version_id ?? null,
+    status:             row.status,
+    formData:           row.form_data ?? {},
+    attachments:        row.attachments ?? [],
+    submittedAt:        row.submitted_at ?? null,
+    reviewedAt:         row.reviewed_at ?? null,
+    reviewedBy:         row.reviewed_by ?? null,
+    reviewNotes:        row.review_notes ?? null,
+    createdAt:          row.created_at,
+    updatedAt:          row.updated_at,
+  };
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
 
 function nowIso() {
   return new Date().toISOString();
@@ -80,12 +196,23 @@ function genId(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function hashPassword(plain) {
-  return crypto.createHash("sha256").update(plain).digest("hex");
+function safeJson(raw, fallback) {
+  if (raw === null || raw === undefined) return fallback;
+  if (typeof raw === "object") return raw; // pg already parses JSONB
+  try { return JSON.parse(raw); } catch { return fallback; }
 }
 
-function verifyPassword(plain, hash) {
-  return hashPassword(plain) === hash;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value) {
+  return typeof value === "string" && UUID_RE.test(value);
 }
 
-module.exports = { ok, created, fail, paged, formatTask, formatEmployee, formatEntry, safeJson, nowIso, genId, hashPassword, verifyPassword };
+module.exports = {
+  ok, fail, paged,
+  hashPassword, verifyPassword,
+  generateInviteToken,
+  formatTask, formatUser, formatEmployee, formatEntry,
+  formatTemplate, formatTemplateVersion, formatSubmission,
+  nowIso, genId, safeJson, isUuid,
+};

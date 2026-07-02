@@ -23,11 +23,14 @@ import { Route as FilesRouteImport } from './routes/files'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as BillingRouteImport } from './routes/billing'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as TemplatesIndexRouteImport } from './routes/templates/index'
 import { Route as SettingsIndexRouteImport } from './routes/settings/index'
 import { Route as SalesIndexRouteImport } from './routes/sales/index'
 import { Route as CostsIndexRouteImport } from './routes/costs/index'
 import { Route as ClientsIndexRouteImport } from './routes/clients/index'
 import { Route as BankIndexRouteImport } from './routes/bank/index'
+import { Route as TemplatesTemplateIdRouteImport } from './routes/templates/$templateId'
+import { Route as SubmissionsSubmissionIdRouteImport } from './routes/submissions/$submissionId'
 import { Route as SettingsVaultRouteImport } from './routes/settings/vault'
 import { Route as SettingsSubscriptionRouteImport } from './routes/settings/subscription'
 import { Route as SettingsMileageRouteImport } from './routes/settings/mileage'
@@ -38,6 +41,7 @@ import { Route as SettingsConnectionsRouteImport } from './routes/settings/conne
 import { Route as SettingsBusinessProfileRouteImport } from './routes/settings/business-profile'
 import { Route as SettingsAutomationRouteImport } from './routes/settings/automation'
 import { Route as SettingsApprovalsRouteImport } from './routes/settings/approvals'
+import { Route as InviteTokenRouteImport } from './routes/invite.$token'
 import { Route as ClientsClientIdRouteImport } from './routes/clients/$clientId'
 import { Route as ClientsClientIdIndexRouteImport } from './routes/clients/$clientId.index'
 import { Route as ClientsClientIdTabRouteImport } from './routes/clients/$clientId.$tab'
@@ -112,6 +116,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TemplatesIndexRoute = TemplatesIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => TemplatesRoute,
+} as any)
 const SettingsIndexRoute = SettingsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -135,6 +144,16 @@ const ClientsIndexRoute = ClientsIndexRouteImport.update({
 const BankIndexRoute = BankIndexRouteImport.update({
   id: '/bank/',
   path: '/bank/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TemplatesTemplateIdRoute = TemplatesTemplateIdRouteImport.update({
+  id: '/$templateId',
+  path: '/$templateId',
+  getParentRoute: () => TemplatesRoute,
+} as any)
+const SubmissionsSubmissionIdRoute = SubmissionsSubmissionIdRouteImport.update({
+  id: '/submissions/$submissionId',
+  path: '/submissions/$submissionId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsVaultRoute = SettingsVaultRouteImport.update({
@@ -187,6 +206,11 @@ const SettingsApprovalsRoute = SettingsApprovalsRouteImport.update({
   path: '/approvals',
   getParentRoute: () => SettingsRoute,
 } as any)
+const InviteTokenRoute = InviteTokenRouteImport.update({
+  id: '/invite/$token',
+  path: '/invite/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ClientsClientIdRoute = ClientsClientIdRouteImport.update({
   id: '/clients/$clientId',
   path: '/clients/$clientId',
@@ -215,10 +239,11 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRouteWithChildren
   '/submission-history': typeof SubmissionHistoryRoute
   '/tasks': typeof TasksRoute
-  '/templates': typeof TemplatesRoute
+  '/templates': typeof TemplatesRouteWithChildren
   '/time': typeof TimeRoute
   '/workflows': typeof WorkflowsRoute
   '/clients/$clientId': typeof ClientsClientIdRouteWithChildren
+  '/invite/$token': typeof InviteTokenRoute
   '/settings/approvals': typeof SettingsApprovalsRoute
   '/settings/automation': typeof SettingsAutomationRoute
   '/settings/business-profile': typeof SettingsBusinessProfileRoute
@@ -229,11 +254,14 @@ export interface FileRoutesByFullPath {
   '/settings/mileage': typeof SettingsMileageRoute
   '/settings/subscription': typeof SettingsSubscriptionRoute
   '/settings/vault': typeof SettingsVaultRoute
+  '/submissions/$submissionId': typeof SubmissionsSubmissionIdRoute
+  '/templates/$templateId': typeof TemplatesTemplateIdRoute
   '/bank/': typeof BankIndexRoute
   '/clients/': typeof ClientsIndexRoute
   '/costs/': typeof CostsIndexRoute
   '/sales/': typeof SalesIndexRoute
   '/settings/': typeof SettingsIndexRoute
+  '/templates/': typeof TemplatesIndexRoute
   '/clients/$clientId/$tab': typeof ClientsClientIdTabRoute
   '/clients/$clientId/': typeof ClientsClientIdIndexRoute
 }
@@ -248,9 +276,9 @@ export interface FileRoutesByTo {
   '/ocr': typeof OcrRoute
   '/submission-history': typeof SubmissionHistoryRoute
   '/tasks': typeof TasksRoute
-  '/templates': typeof TemplatesRoute
   '/time': typeof TimeRoute
   '/workflows': typeof WorkflowsRoute
+  '/invite/$token': typeof InviteTokenRoute
   '/settings/approvals': typeof SettingsApprovalsRoute
   '/settings/automation': typeof SettingsAutomationRoute
   '/settings/business-profile': typeof SettingsBusinessProfileRoute
@@ -261,11 +289,14 @@ export interface FileRoutesByTo {
   '/settings/mileage': typeof SettingsMileageRoute
   '/settings/subscription': typeof SettingsSubscriptionRoute
   '/settings/vault': typeof SettingsVaultRoute
+  '/submissions/$submissionId': typeof SubmissionsSubmissionIdRoute
+  '/templates/$templateId': typeof TemplatesTemplateIdRoute
   '/bank': typeof BankIndexRoute
   '/clients': typeof ClientsIndexRoute
   '/costs': typeof CostsIndexRoute
   '/sales': typeof SalesIndexRoute
   '/settings': typeof SettingsIndexRoute
+  '/templates': typeof TemplatesIndexRoute
   '/clients/$clientId/$tab': typeof ClientsClientIdTabRoute
   '/clients/$clientId': typeof ClientsClientIdIndexRoute
 }
@@ -282,10 +313,11 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRouteWithChildren
   '/submission-history': typeof SubmissionHistoryRoute
   '/tasks': typeof TasksRoute
-  '/templates': typeof TemplatesRoute
+  '/templates': typeof TemplatesRouteWithChildren
   '/time': typeof TimeRoute
   '/workflows': typeof WorkflowsRoute
   '/clients/$clientId': typeof ClientsClientIdRouteWithChildren
+  '/invite/$token': typeof InviteTokenRoute
   '/settings/approvals': typeof SettingsApprovalsRoute
   '/settings/automation': typeof SettingsAutomationRoute
   '/settings/business-profile': typeof SettingsBusinessProfileRoute
@@ -296,11 +328,14 @@ export interface FileRoutesById {
   '/settings/mileage': typeof SettingsMileageRoute
   '/settings/subscription': typeof SettingsSubscriptionRoute
   '/settings/vault': typeof SettingsVaultRoute
+  '/submissions/$submissionId': typeof SubmissionsSubmissionIdRoute
+  '/templates/$templateId': typeof TemplatesTemplateIdRoute
   '/bank/': typeof BankIndexRoute
   '/clients/': typeof ClientsIndexRoute
   '/costs/': typeof CostsIndexRoute
   '/sales/': typeof SalesIndexRoute
   '/settings/': typeof SettingsIndexRoute
+  '/templates/': typeof TemplatesIndexRoute
   '/clients/$clientId/$tab': typeof ClientsClientIdTabRoute
   '/clients/$clientId/': typeof ClientsClientIdIndexRoute
 }
@@ -322,6 +357,7 @@ export interface FileRouteTypes {
     | '/time'
     | '/workflows'
     | '/clients/$clientId'
+    | '/invite/$token'
     | '/settings/approvals'
     | '/settings/automation'
     | '/settings/business-profile'
@@ -332,11 +368,14 @@ export interface FileRouteTypes {
     | '/settings/mileage'
     | '/settings/subscription'
     | '/settings/vault'
+    | '/submissions/$submissionId'
+    | '/templates/$templateId'
     | '/bank/'
     | '/clients/'
     | '/costs/'
     | '/sales/'
     | '/settings/'
+    | '/templates/'
     | '/clients/$clientId/$tab'
     | '/clients/$clientId/'
   fileRoutesByTo: FileRoutesByTo
@@ -351,9 +390,9 @@ export interface FileRouteTypes {
     | '/ocr'
     | '/submission-history'
     | '/tasks'
-    | '/templates'
     | '/time'
     | '/workflows'
+    | '/invite/$token'
     | '/settings/approvals'
     | '/settings/automation'
     | '/settings/business-profile'
@@ -364,11 +403,14 @@ export interface FileRouteTypes {
     | '/settings/mileage'
     | '/settings/subscription'
     | '/settings/vault'
+    | '/submissions/$submissionId'
+    | '/templates/$templateId'
     | '/bank'
     | '/clients'
     | '/costs'
     | '/sales'
     | '/settings'
+    | '/templates'
     | '/clients/$clientId/$tab'
     | '/clients/$clientId'
   id:
@@ -388,6 +430,7 @@ export interface FileRouteTypes {
     | '/time'
     | '/workflows'
     | '/clients/$clientId'
+    | '/invite/$token'
     | '/settings/approvals'
     | '/settings/automation'
     | '/settings/business-profile'
@@ -398,11 +441,14 @@ export interface FileRouteTypes {
     | '/settings/mileage'
     | '/settings/subscription'
     | '/settings/vault'
+    | '/submissions/$submissionId'
+    | '/templates/$templateId'
     | '/bank/'
     | '/clients/'
     | '/costs/'
     | '/sales/'
     | '/settings/'
+    | '/templates/'
     | '/clients/$clientId/$tab'
     | '/clients/$clientId/'
   fileRoutesById: FileRoutesById
@@ -419,10 +465,12 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRouteWithChildren
   SubmissionHistoryRoute: typeof SubmissionHistoryRoute
   TasksRoute: typeof TasksRoute
-  TemplatesRoute: typeof TemplatesRoute
+  TemplatesRoute: typeof TemplatesRouteWithChildren
   TimeRoute: typeof TimeRoute
   WorkflowsRoute: typeof WorkflowsRoute
   ClientsClientIdRoute: typeof ClientsClientIdRouteWithChildren
+  InviteTokenRoute: typeof InviteTokenRoute
+  SubmissionsSubmissionIdRoute: typeof SubmissionsSubmissionIdRoute
   BankIndexRoute: typeof BankIndexRoute
   ClientsIndexRoute: typeof ClientsIndexRoute
   CostsIndexRoute: typeof CostsIndexRoute
@@ -529,6 +577,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/templates/': {
+      id: '/templates/'
+      path: '/'
+      fullPath: '/templates/'
+      preLoaderRoute: typeof TemplatesIndexRouteImport
+      parentRoute: typeof TemplatesRoute
+    }
     '/settings/': {
       id: '/settings/'
       path: '/'
@@ -562,6 +617,20 @@ declare module '@tanstack/react-router' {
       path: '/bank'
       fullPath: '/bank/'
       preLoaderRoute: typeof BankIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/templates/$templateId': {
+      id: '/templates/$templateId'
+      path: '/$templateId'
+      fullPath: '/templates/$templateId'
+      preLoaderRoute: typeof TemplatesTemplateIdRouteImport
+      parentRoute: typeof TemplatesRoute
+    }
+    '/submissions/$submissionId': {
+      id: '/submissions/$submissionId'
+      path: '/submissions/$submissionId'
+      fullPath: '/submissions/$submissionId'
+      preLoaderRoute: typeof SubmissionsSubmissionIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings/vault': {
@@ -634,6 +703,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsApprovalsRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/invite/$token': {
+      id: '/invite/$token'
+      path: '/invite/$token'
+      fullPath: '/invite/$token'
+      preLoaderRoute: typeof InviteTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/clients/$clientId': {
       id: '/clients/$clientId'
       path: '/clients/$clientId'
@@ -690,6 +766,20 @@ const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
   SettingsRouteChildren,
 )
 
+interface TemplatesRouteChildren {
+  TemplatesTemplateIdRoute: typeof TemplatesTemplateIdRoute
+  TemplatesIndexRoute: typeof TemplatesIndexRoute
+}
+
+const TemplatesRouteChildren: TemplatesRouteChildren = {
+  TemplatesTemplateIdRoute: TemplatesTemplateIdRoute,
+  TemplatesIndexRoute: TemplatesIndexRoute,
+}
+
+const TemplatesRouteWithChildren = TemplatesRoute._addFileChildren(
+  TemplatesRouteChildren,
+)
+
 interface ClientsClientIdRouteChildren {
   ClientsClientIdTabRoute: typeof ClientsClientIdTabRoute
   ClientsClientIdIndexRoute: typeof ClientsClientIdIndexRoute
@@ -716,10 +806,12 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRouteWithChildren,
   SubmissionHistoryRoute: SubmissionHistoryRoute,
   TasksRoute: TasksRoute,
-  TemplatesRoute: TemplatesRoute,
+  TemplatesRoute: TemplatesRouteWithChildren,
   TimeRoute: TimeRoute,
   WorkflowsRoute: WorkflowsRoute,
   ClientsClientIdRoute: ClientsClientIdRouteWithChildren,
+  InviteTokenRoute: InviteTokenRoute,
+  SubmissionsSubmissionIdRoute: SubmissionsSubmissionIdRoute,
   BankIndexRoute: BankIndexRoute,
   ClientsIndexRoute: ClientsIndexRoute,
   CostsIndexRoute: CostsIndexRoute,

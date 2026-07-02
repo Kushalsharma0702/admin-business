@@ -1,7 +1,7 @@
 import { createFileRoute, useParams, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAppStore, uid } from "@/store/useAppStore";
-import { clientsApi, tasksApi, ADMIN_STATUSES, type ApiTask, type AdminStatus } from "@/lib/api";
+import { clientsApi, tasksApi, metaApi, ADMIN_STATUSES, type ApiTask, type AdminStatus, type TaskTypeInfo } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -159,11 +159,18 @@ function Tasks({ clientId }: { clientId: string }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({
     title: "",
-    taskType: "info" as string,
+    taskType: "CORPORATE_TAX_RETURN" as string,
     adminStatus: "Data not received" as AdminStatus,
     description: "",
   });
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+
+  const { data: taskTypesRes } = useQuery({
+    queryKey: ["task-types"],
+    queryFn: () => metaApi.getTaskTypes(),
+    staleTime: 60_000,
+  });
+  const workflowTypes: TaskTypeInfo[] = taskTypesRes?.data ?? [];
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["client-tasks", clientId],
@@ -186,7 +193,7 @@ function Tasks({ clientId }: { clientId: string }) {
       });
       toast.success("Task assigned to client");
       setOpen(false);
-      setForm({ title: "", taskType: "info", adminStatus: "Data not received", description: "" });
+      setForm({ title: "", taskType: "CORPORATE_TAX_RETURN", adminStatus: "Data not received", description: "" });
       queryClient.invalidateQueries({ queryKey: ["client-tasks", clientId] });
       queryClient.invalidateQueries({ queryKey: ["admin-tasks"] });
     } catch (err: unknown) {
@@ -329,13 +336,33 @@ function Tasks({ clientId }: { clientId: string }) {
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Task type</label>
-              <select className="mt-1 w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
-                value={form.taskType} onChange={(e) => setForm({ ...form, taskType: e.target.value })}>
-                <option value="info">Info (read + mark complete)</option>
-                <option value="onboarding_form">T2 Onboarding Form</option>
-                <option value="sheet_remarks">Query Sheet Remarks</option>
-                <option value="basic_docs_upload">Documents Upload</option>
-                <option value="payroll">Payroll Setup</option>
+              <select
+                className="mt-1 w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
+                value={form.taskType}
+                onChange={(e) => {
+                  const taskType = e.target.value;
+                  const wf = workflowTypes.find((t) => t.key === taskType);
+                  setForm((f) => ({
+                    ...f,
+                    taskType,
+                    title: wf && (!f.title.trim() || workflowTypes.some((t) => t.displayName === f.title))
+                      ? wf.displayName
+                      : f.title,
+                  }));
+                }}
+              >
+                <optgroup label="Workflow tasks">
+                  {workflowTypes.map((t) => (
+                    <option key={t.key} value={t.key}>{t.displayName}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="Other task types">
+                  <option value="info">Info (read + mark complete)</option>
+                  <option value="onboarding_form">T2 Onboarding Form</option>
+                  <option value="sheet_remarks">Query Sheet Remarks</option>
+                  <option value="basic_docs_upload">Documents Upload</option>
+                  <option value="payroll">Payroll Setup</option>
+                </optgroup>
               </select>
             </div>
             <div>

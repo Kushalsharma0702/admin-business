@@ -1,16 +1,26 @@
-// index.js — TaxEase Backend Entry Point
+// index.js — TaxEase Backend Entry Point (PostgreSQL edition)
+require("./config/env");
 const express = require("express");
 const cors = require("cors");
-const { initSchema } = require("./schema");
-
-// Init DB schema
-initSchema();
 
 const app = express();
 
 // Middleware
-app.use(cors({ origin: "*", methods: ["GET","POST","PATCH","PUT","DELETE","OPTIONS"] }));
-app.use(express.json());
+const allowedOrigins = process.env.NODE_ENV === "production"
+  ? [
+      "https://adminbusiness.diamondaccounts.ca",  // admin panel frontend
+      "https://apibusiness.diamondaccounts.ca",     // API domain (Swagger UI, direct calls)
+      "https://tax.diamondaccounts.ca",             // client mobile web
+    ]
+  : true; // allow all in dev
+
+app.use(cors({
+  origin: allowedOrigins,
+  methods: ["GET","POST","PATCH","PUT","DELETE","OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
+}));
+app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // Logger
@@ -22,38 +32,48 @@ app.use((req, _, next) => {
 // Swagger UI
 require("./swagger").setupSwagger(app);
 
-// Routes
+// ── Routes ────────────────────────────────────────────────────────────────────
 app.use("/api/auth",            require("./routes/auth"));
+app.use("/api/admin",           require("./routes/admin"));
+app.use("/api/admin/templates", require("./routes/admin-templates"));
+app.use("/api/admin/submissions", require("./routes/admin-submissions"));
+
+const { adminRouter: adminS3, clientRouter: clientS3 } = require("./routes/admin-s3");
+app.use("/api/admin/s3",        adminS3);
+app.use("/v3/api/v1/s3",        clientS3);
+
+// Client routes (kept on same paths for mobile app compatibility)
 app.use("/v3/api/v1/tasks",     require("./routes/client-tasks"));
+app.use("/v3/api/v1",           require("./routes/client-forms"));
 app.use("/v3/api/v1/documents", require("./routes/client-documents"));
 app.use("/v3/api/v1/payroll",   require("./routes/client-payroll"));
-app.use("/api/admin",           require("./routes/admin"));
 
-// Health check
+// Health check — used by nginx, PM2, and load balancers
+app.get("/health", (_, res) => res.json({
+  status: "ok", uptime: process.uptime(), ts: Date.now(),
+}));
+
 app.get("/", (_, res) => res.json({
-  name: "TaxEase API", version: "1.0.0", status: "running",
-  docs: "http://localhost:3001/api-docs",
-  openapi: "http://localhost:3001/api-docs.json",
-  routes: {
-    auth:      "POST /api/auth/login",
-    me:        "GET  /api/auth/me",
-    tasks:     "GET  /v3/api/v1/tasks          (client JWT)",
-    documents: "POST /v3/api/v1/documents/upload (client JWT)",
-    payroll:   "GET  /v3/api/v1/payroll/employees (client JWT)",
-    adminDash: "GET  /api/admin/dashboard       (admin JWT)",
-    adminMeta: "GET  /api/admin/meta/admin-statuses",
-  },
+  name: "Diamond Accounts Tax API", version: "2.0.0", status: "running",
+  docs: "/api-docs",
+  database: "PostgreSQL",
 }));
 
 app.use((_, res) => res.status(404).json({ success: false, message: "Route not found" }));
 
+// Global error handler
+app.use((err, req, res, _next) => {
+  console.error("Unhandled error:", err.message);
+  res.status(500).json({ success: false, message: "Internal server error" });
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`\n  TaxEase Backend  →  http://localhost:${PORT}`);
-  console.log(`  Swagger UI       →  http://localhost:${PORT}/api-docs`);
+  console.log(`\n  TaxEase Backend v2.0  →  http://localhost:${PORT}`);
+  console.log(`  Swagger UI            →  http://localhost:${PORT}/api-docs`);
+  console.log(`  Database              →  PostgreSQL`);
   console.log("  ────────────────────────────────────────────");
   console.log("  POST http://localhost:3001/api/auth/login");
-  console.log("  GET  http://localhost:3001/api/admin/dashboard");
-  console.log("  GET  http://localhost:3001/api/admin/meta/admin-statuses");
-  console.log("  GET  http://localhost:3001/v3/api/v1/tasks\n");
+  console.log("  POST http://localhost:3001/api/auth/accept-invite");
+  console.log("  GET  http://localhost:3001/api/admin/templates\n");
 });
