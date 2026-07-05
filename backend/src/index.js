@@ -42,6 +42,17 @@ const { adminRouter: adminS3, clientRouter: clientS3 } = require("./routes/admin
 app.use("/api/admin/s3",        adminS3);
 app.use("/v3/api/v1/s3",        clientS3);
 
+const { adminRouter: adminGenDocs, clientRouter: clientGenDocs } = require("./routes/general-docs");
+app.use("/api/admin",           adminGenDocs);
+app.use("/v3/api/v1/general-docs", clientGenDocs);
+
+const { adminRouter: adminProfiles, clientRouter: clientProfiles } = require("./routes/profiles");
+app.use("/api/admin",              adminProfiles);
+app.use("/v3/api/v1/profiles",     clientProfiles);
+
+// Client auth — customer-type lookup for Flutter post-login
+app.use("/v3/api/v1/auth",     require("./routes/client-auth"));
+
 // Client routes (kept on same paths for mobile app compatibility)
 app.use("/v3/api/v1/tasks",     require("./routes/client-tasks"));
 app.use("/v3/api/v1",           require("./routes/client-forms"));

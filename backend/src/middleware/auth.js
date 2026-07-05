@@ -12,8 +12,14 @@ function requireAuth(role) {
 
     try {
       const payload = jwt.verify(token, JWT_SECRET);
-      if (role && payload.role !== role) {
-        return res.status(403).json({ success: false, message: "Forbidden: insufficient role" });
+      if (role) {
+        // Accept portal tokens (role:"client"), Flutter/Python tokens (role:"user",type:"access"),
+        // and legacy no-role tokens (type:"access") as valid client tokens.
+        const isClientToken = payload.role === role
+          || (role === "client" && payload.type === "access" && (!payload.role || payload.role === "user"));
+        if (!isClientToken) {
+          return res.status(403).json({ success: false, message: "Forbidden: insufficient role" });
+        }
       }
       req.user = payload;
       return next();
