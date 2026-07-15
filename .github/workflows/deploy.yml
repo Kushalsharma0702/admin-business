@@ -1,0 +1,116 @@
+name: Deploy to EC2
+
+# Triggers: push to main branch only
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # allow manual trigger from GitHub UI
+
+env:
+  ADMIN_DOMAIN: adminbusiness.diamondaccounts.ca
+  API_DOMAIN:   apibusiness.diamondaccounts.ca
+  APP_DIR:      /var/www/taxease
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # ── 1. Checkout ─────────────────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── 2. Setup Node ────────────────────────────────────────────────────────
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      # ── 3. Install frontend dependencies ────────────────────────────────────
+      - name: Install frontend deps
+        run: npm ci
+
+      # ── 4. Build frontend (nitro node-server for EC2) ────────────────────────
+      - name: Build frontend
+        run: NITRO_PRESET=node-server npm run build
+        env:
+          VITE_API_BASE_URL: https://${{ env.API_DOMAIN }}
+
+      # ── 5. Install backend deps ──────────────────────────────────────────────
+      - name: Install backend deps
+        run: npm ci --omit=dev
+        working-directory: backend
+
+      # ── 6. Write SSH key ─────────────────────────────────────────────────────
+      - name: Write SSH key
+        run: |
+          echo "${{ secrets.EC2_SSH_KEY }}" > /tmp/deploy.pem
+          chmod 400 /tmp/deploy.pem
+
+      # ── 7. Upload frontend build ─────────────────────────────────────────────
+      - name: Upload frontend
+        run: |
+          rsync -az --delete \
+            -e "ssh -i /tmp/deploy.pem -o StrictHostKeyChecking=no" \
+            --exclude='.git' \
+            .output/ ubuntu@${{ secrets.EC2_IP }}:${{ env.APP_DIR }}/frontend/
+
+      # ── 8. Upload backend source ─────────────────────────────────────────────
+      - name: Upload backend
+        run: |
+          rsync -az --delete \
+            -e "ssh -i /tmp/deploy.pem -o StrictHostKeyChecking=no" \
+            --exclude='node_modules' \
+            --exclude='.env' \
+            --exclude='*.db' \
+            backend/ ubuntu@${{ secrets.EC2_IP }}:${{ env.APP_DIR }}/backend/
+
+      # ── 9. Upload PM2 ecosystem config ──────────────────────────────────────
+      - name: Upload PM2 config
+        run: |
+          scp -i /tmp/deploy.pem -o StrictHostKeyChecking=no \
+            deploy/ecosystem.config.cjs \
+            ubuntu@${{ secrets.EC2_IP }}:${{ env.APP_DIR }}/ecosystem.config.cjs
+
+      # ── 10. Remote: install + migrate + reload ───────────────────────────────
+      - name: Remote deploy
+        run: |
+          ssh -i /tmp/deploy.pem -o StrictHostKeyChecking=no \
+            ubuntu@${{ secrets.EC2_IP }} << 'REMOTE'
+          set -e
+
+          echo "→ Installing backend dependencies..."
+          cd /var/www/taxease/backend
+          npm ci --omit=dev --silent
+
+          echo "→ Running migrations..."
+          NODE_ENV=production npm run migrate
+
+          echo "→ Reloading PM2 (zero downtime)..."
+          cd /var/www/taxease
+          pm2 reload ecosystem.config.cjs --update-env || pm2 start ecosystem.config.cjs
+          pm2 save
+
+          echo "✅ Deploy complete on server"
+          REMOTE
+
+      # ── 11. Smoke test ───────────────────────────────────────────────────────
+      - name: Smoke test
+        run: |
+          sleep 5
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            https://${{ env.API_DOMAIN }}/health || echo "000")
+          echo "API health: HTTP $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "⚠ Health check returned $STATUS"
+            exit 1
+          fi
+          echo "✅ Deployment verified"
+
+      # ── 12. Cleanup ──────────────────────────────────────────────────────────
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f /tmp/deploy.pem
