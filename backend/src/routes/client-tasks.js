@@ -271,6 +271,55 @@ router.post("/:task_id/documents/upload", upload.single("file"), async (req, res
   }, "Document uploaded"));
 });
 
+// 3.8b PATCH /v3/api/v1/tasks/:task_id/draft — save partial form response without submitting
+router.patch("/:task_id/draft", async (req, res) => {
+  const task = await findClientTask(req.params.task_id, req.user.sub);
+  if (!task) return res.status(404).json(fail("Task not found"));
+  if (task.status === "complete") return res.status(409).json(fail("Task already completed"));
+
+  const { formData } = req.body;
+  if (!formData || typeof formData !== "object") {
+    return res.status(400).json(fail("formData object is required"));
+  }
+
+  const { rows: [updated] } = await db.query(
+    "UPDATE tasks SET draft_data=$1, status='draft', updated_at=NOW() WHERE id=$2 RETURNING *",
+    [JSON.stringify(formData), task.id]
+  );
+  return res.json(ok({
+    taskId:    updated.id,
+    status:    updated.status,
+    draftData: updated.draft_data,
+    savedAt:   updated.updated_at,
+  }, "Draft saved"));
+});
+
+// 3.8c POST /v3/api/v1/tasks/:task_id/submit-form — final submit of custom task form
+router.post("/:task_id/submit-form", async (req, res) => {
+  const task = await findClientTask(req.params.task_id, req.user.sub);
+  if (!task) return res.status(404).json(fail("Task not found"));
+  if (task.status === "complete") return res.status(409).json(fail("Task already completed"));
+
+  const { formData } = req.body;
+  if (!formData || typeof formData !== "object") {
+    return res.status(400).json(fail("formData object is required"));
+  }
+
+  const merged = mergeConfigUpdate(task.task_type, safeJson(task.config, {}), formData);
+  const { rows: [updated] } = await db.query(
+    `UPDATE tasks
+     SET config=$1, draft_data=NULL, status='complete', completed_at=NOW(), updated_at=NOW()
+     WHERE id=$2 RETURNING *`,
+    [JSON.stringify(merged), task.id]
+  );
+
+  return res.json(ok({
+    taskId:      updated.id,
+    status:      "complete",
+    submittedAt: updated.completed_at,
+  }, "Task form submitted successfully"));
+});
+
 // 3.9 POST /v3/api/v1/tasks/:task_id/documents/submit
 router.post("/:task_id/documents/submit", async (req, res) => {
   const task = await findClientTask(req.params.task_id, req.user.sub);

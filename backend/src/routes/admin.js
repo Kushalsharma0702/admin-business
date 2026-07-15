@@ -241,11 +241,19 @@ router.patch("/clients/:clientId", async (req, res) => {
 
 router.delete("/clients/:clientId", async (req, res) => {
   const { rows } = await db.query(
-    "SELECT id FROM users WHERE (id::text=$1 OR slug=$1) AND role='client'",
+    "SELECT id, email FROM users WHERE (id::text=$1 OR slug=$1) AND role='client'",
     [req.params.clientId]
   );
   if (!rows[0]) return res.status(404).json(fail("Client not found"));
   await db.query("DELETE FROM users WHERE id=$1", [rows[0].id]);
+  // Cascade delete to Flutter DB so a re-invite always starts with a fresh UUID
+  if (db.mainQuery) {
+    try {
+      await db.mainQuery("DELETE FROM users WHERE email=LOWER($1)", [rows[0].email]);
+    } catch (err) {
+      console.error(`Flutter DB cleanup failed for ${rows[0].email} (non-blocking):`, err.message);
+    }
+  }
   return res.json(ok({ id: rows[0].id, deletedAt: new Date().toISOString() }, "Client deleted"));
 });
 
@@ -334,22 +342,34 @@ router.post("/clients/:clientId/tasks", async (req, res) => {
     if (d.openDate) { openDate = d.openDate; dueDate = d.dueDate; taxYear = taxYear || d.taxYear; }
   }
 
+  // For CUSTOM tasks, the configSchema lives in metadata.configSchema
+  if (taskType === "CUSTOM" && Array.isArray(b.formFields)) {
+    metadata.configSchema = b.formFields;
+  }
+  if (taskType === "CUSTOM" && b.documentRequirements) {
+    metadata.documentRequirements = normalizeDocumentRequirements(b.documentRequirements);
+  }
+
+  const priority = ["high","medium","low","none"].includes(b.priority) ? b.priority : "medium";
+  const instructions = b.instructions || null;
+
   const { rows: [task] } = await db.query(
     `INSERT INTO tasks
        (client_id, assigned_by, template_id, template_version_id,
-        title, description, task_type, admin_status, metadata, config,
-        tax_year, due_date, open_date)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        title, description, instructions, task_type, admin_status, metadata, config,
+        tax_year, due_date, open_date, priority)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      RETURNING *`,
     [
       client.id, req.user.sub,
       b.templateId || null, b.templateVersionId || null,
-      title, b.description || null,
+      title, b.description || null, instructions,
       taskType,
       adminStatus,
       JSON.stringify(metadata),
       b.config ? JSON.stringify(b.config) : "{}",
       taxYear, dueDate, openDate,
+      priority,
     ]
   );
 

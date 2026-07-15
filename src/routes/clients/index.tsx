@@ -7,16 +7,20 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useState } from "react";
-import { clientsApi, inviteApi, type ApiClient } from "@/lib/api";
-import { Loader2, WifiOff, UserPlus, Mail, RotateCcw, CheckCircle2, Clock } from "lucide-react";
+import { clientsApi, inviteApi, generalDocsAdminApi, type ApiClient, type GeneralDocField } from "@/lib/api";
+import { GeneralDocsConfig } from "@/components/app/GeneralDocsConfig";
+import { Loader2, WifiOff, UserPlus, Mail, RotateCcw, CheckCircle2, Clock, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 
 export const Route = createFileRoute("/clients/")({ component: ClientsList });
 
 const EMPTY_FORM = { name: "", email: "", phone: "", occupation: "" };
+const EMPTY_GEN_DOCS = { enabled: false, fields: [] as Partial<GeneralDocField>[] };
 
 function ClientsList() {
   const qc = useQueryClient();
@@ -24,6 +28,7 @@ function ClientsList() {
   const [tab, setTab] = useState<"all" | "pending" | "active">("all");
   const [showInvite, setShowInvite] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [genDocs, setGenDocs] = useState(EMPTY_GEN_DOCS);
   const [resendingId, setResendingId] = useState<string | null>(null);
 
   const { data, isLoading, isError } = useQuery({
@@ -42,11 +47,26 @@ function ClientsList() {
 
   // ── Invite mutation ─────────────────────────────────────────────────────────
   const inviteMutation = useMutation({
-    mutationFn: () => clientsApi.create({ name: form.name.trim(), email: form.email.trim(), phone: form.phone.trim() || undefined, occupation: form.occupation.trim() || undefined }),
+    mutationFn: async () => {
+      const res = await clientsApi.create({
+        name: form.name.trim(), email: form.email.trim(),
+        phone: form.phone.trim() || undefined, occupation: form.occupation.trim() || undefined,
+      });
+      // Save general docs config if enabled or has fields
+      if (genDocs.enabled || genDocs.fields.length > 0) {
+        try {
+          await generalDocsAdminApi.save(res.data.id, genDocs);
+        } catch {
+          // Non-fatal: doc config can be set later
+        }
+      }
+      return res;
+    },
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["admin-clients"] });
       setShowInvite(false);
       setForm(EMPTY_FORM);
+      setGenDocs(EMPTY_GEN_DOCS);
       toast.success(`Invite sent to ${res.data.email}`, {
         description: "The client will receive an email to set their password.",
         duration: 5000,
@@ -182,8 +202,8 @@ function ClientsList() {
       )}
 
       {/* ── Invite Client Dialog ─────────────────────────────────────────────── */}
-      <Dialog open={showInvite} onOpenChange={(v) => { setShowInvite(v); if (!v) setForm(EMPTY_FORM); }}>
-        <DialogContent className="sm:max-w-md">
+      <Dialog open={showInvite} onOpenChange={(v) => { setShowInvite(v); if (!v) { setForm(EMPTY_FORM); setGenDocs(EMPTY_GEN_DOCS); } }}>
+        <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Mail className="h-5 w-5 text-primary" />
@@ -194,60 +214,59 @@ function ClientsList() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-1">
-            <div className="space-y-1.5">
-              <Label>Full name <span className="text-destructive">*</span></Label>
-              <Input
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                placeholder="e.g. John Smith"
-                autoFocus
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Email address <span className="text-destructive">*</span></Label>
-              <Input
-                type="email"
-                value={form.email}
-                onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
-                placeholder="client@example.com"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label>Phone <span className="text-muted-foreground text-xs">(optional)</span></Label>
-                <Input
-                  type="tel"
-                  value={form.phone}
-                  onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
-                  placeholder="+1 (416) 555-0100"
-                />
+          <ScrollArea className="flex-1 pr-1">
+            <div className="space-y-5 py-1 pr-2">
+              {/* Client details */}
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label>Full name <span className="text-destructive">*</span></Label>
+                  <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                    placeholder="e.g. John Smith" autoFocus />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Email address <span className="text-destructive">*</span></Label>
+                  <Input type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+                    placeholder="client@example.com" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label>Phone <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                    <Input type="tel" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+                      placeholder="+1 (416) 555-0100" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Occupation <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                    <Input value={form.occupation} onChange={(e) => setForm((f) => ({ ...f, occupation: e.target.value }))}
+                      placeholder="e.g. Restaurant Owner" />
+                  </div>
+                </div>
               </div>
-              <div className="space-y-1.5">
-                <Label>Occupation <span className="text-muted-foreground text-xs">(optional)</span></Label>
-                <Input
-                  value={form.occupation}
-                  onChange={(e) => setForm((f) => ({ ...f, occupation: e.target.value }))}
-                  placeholder="e.g. Restaurant Owner"
-                />
+
+              <Separator />
+
+              {/* General Documentation */}
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <FileText className="h-4 w-4 text-muted-foreground" />
+                  <p className="text-sm font-semibold">General Documentation</p>
+                </div>
+                <GeneralDocsConfig value={genDocs} onChange={setGenDocs} compact />
+              </div>
+
+              {/* What happens next */}
+              <div className="rounded-lg bg-muted/50 border p-3 text-xs text-muted-foreground space-y-1">
+                <p className="font-medium text-foreground text-sm mb-2">What happens next</p>
+                <div className="flex items-start gap-2"><span className="text-primary font-bold mt-0.5">1.</span> Client is created with <Badge variant="secondary" className="text-[10px] mx-0.5">invite pending</Badge> status.</div>
+                <div className="flex items-start gap-2"><span className="text-primary font-bold mt-0.5">2.</span> An invite email is sent with a secure link (expires in 7 days).</div>
+                <div className="flex items-start gap-2"><span className="text-primary font-bold mt-0.5">3.</span> Client clicks the link, sets their password, and logs in{genDocs.enabled ? ", then sees their document checklist" : ""}.</div>
               </div>
             </div>
+          </ScrollArea>
 
-            {/* What happens next */}
-            <div className="rounded-lg bg-muted/50 border p-3 text-xs text-muted-foreground space-y-1">
-              <p className="font-medium text-foreground text-sm mb-2">What happens next</p>
-              <div className="flex items-start gap-2"><span className="text-primary font-bold mt-0.5">1.</span> Client is created with <Badge variant="secondary" className="text-[10px] mx-0.5">invite pending</Badge> status.</div>
-              <div className="flex items-start gap-2"><span className="text-primary font-bold mt-0.5">2.</span> An invite email is sent with a secure link (expires in 7 days).</div>
-              <div className="flex items-start gap-2"><span className="text-primary font-bold mt-0.5">3.</span> Client clicks the link, sets their password, and logs in.</div>
-            </div>
-          </div>
-
-          <DialogFooter>
+          <DialogFooter className="pt-2">
             <Button variant="outline" onClick={() => setShowInvite(false)}>Cancel</Button>
-            <Button
-              onClick={() => inviteMutation.mutate()}
-              disabled={!form.name.trim() || !form.email.trim() || inviteMutation.isPending}
-            >
+            <Button onClick={() => inviteMutation.mutate()}
+              disabled={!form.name.trim() || !form.email.trim() || inviteMutation.isPending}>
               {inviteMutation.isPending
                 ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Sending invite…</>
                 : <><Mail className="h-4 w-4 mr-2" />Send Invite</>}

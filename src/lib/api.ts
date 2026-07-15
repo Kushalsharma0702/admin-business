@@ -29,10 +29,11 @@ export type AdminStatus = (typeof ADMIN_STATUSES)[number];
 
 export const TASK_TYPES = [
   "CORPORATE_TAX_RETURN", "HST", "BOOKKEEPING", "PAYROLL",
-  "PD7A", "WCB", "T4", "T4A", "T5018", "T5",
+  "PD7A", "WCB", "T4", "T4A", "T5018", "T5", "CUSTOM",
 ] as const;
 
 export type TaskType = (typeof TASK_TYPES)[number];
+export type TaskPriority = "high" | "medium" | "low" | "none";
 
 export interface ApiTask {
   id: string;
@@ -40,7 +41,9 @@ export interface ApiTask {
   assignedBy: string | null;
   title: string;
   description: string | null;
-  status: "pending" | "complete";
+  instructions: string | null;
+  priority: TaskPriority;
+  status: "pending" | "draft" | "complete";
   adminStatus: string;
   taskType: TaskType | string | null;
   currentSubtask: string | null;
@@ -50,12 +53,69 @@ export interface ApiTask {
   taxYear: number | null;
   config: Record<string, unknown>;
   metadata: Record<string, unknown>;
+  draftData: Record<string, unknown> | null;
   completionNote: string | null;
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
   clientName?: string;
   clientEmail?: string;
+}
+
+// ─── General Documentation types ─────────────────────────────────────────────
+export interface GeneralDocField {
+  key: string;
+  name: string;
+  placeholder: string;
+  required: boolean;
+  maxCount: number;
+  acceptedTypes: string[];
+  notes: string;
+  displayOrder: number;
+}
+
+export interface GeneralDocUpload {
+  id: string;
+  fieldKey: string;
+  slotIndex: number;
+  fileName: string;
+  originalFilename: string;
+  fileType: string | null;
+  fileSize: number;
+  s3Key: string | null;
+  uploadedAt: string;
+}
+
+export interface GeneralDocFieldStatus extends GeneralDocField {
+  uploadedCount: number;
+  pendingCount: number;
+  status: "complete" | "pending" | "optional";
+  slots: Array<{
+    slotIndex: number;
+    uploadedFile: {
+      id: string; fileName: string; originalFilename: string;
+      fileType: string | null; fileSize: number; s3Key: string | null; uploadedAt: string;
+    } | null;
+    status: "uploaded" | "pending";
+  }>;
+}
+
+export interface GeneralDocStatus {
+  enabled: boolean;
+  fields: GeneralDocFieldStatus[];
+  overall: "submitted" | "partial" | "pending" | "not_required";
+}
+
+export interface UserProfile {
+  id: string;
+  userId: string;
+  profileType: "personal" | "business";
+  profileName: string;
+  businessName: string | null;
+  isDefault: boolean;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ClientTask {
@@ -250,6 +310,8 @@ export const clientsApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  delete: (id: string) =>
+    request<{ success: boolean }>(`/api/admin/clients/${id}`, { method: "DELETE" }),
 };
 
 // ─── Admin — Tasks ────────────────────────────────────────────────────────────
@@ -268,9 +330,12 @@ export const tasksApi = {
   listForClient: (clientId: string) =>
     request<{ success: boolean; data: ApiTask[] }>(`/api/admin/clients/${clientId}/tasks`),
   create: (clientId: string, body: {
-    title?: string; description?: string; taskType?: TaskType | string;
+    title?: string; description?: string; instructions?: string;
+    taskType?: TaskType | string;
+    priority?: TaskPriority;
     adminStatus?: AdminStatus | string;
     config?: Record<string, unknown>; metadata?: object;
+    formFields?: ConfigFieldDef[];
     documentRequirements?: { key: string; quantity: number }[];
     taxYear?: number; dueDate?: string; openDate?: string;
   }) =>
@@ -417,6 +482,80 @@ export const clientTasksApi = {
       { method: "POST", body: form },
     );
   },
+};
+
+// ─── Admin — General Documentation ───────────────────────────────────────────
+export const generalDocsAdminApi = {
+  get: (clientId: string) =>
+    request<{ success: boolean; data: GeneralDocStatus & { clientId: string; config: { enabled: boolean; fields: GeneralDocField[]; updatedAt: string } | null; uploadCount: number; uploads: GeneralDocUpload[] } }>(
+      `/api/admin/clients/${clientId}/general-docs`
+    ),
+  save: (clientId: string, body: { enabled: boolean; fields: Partial<GeneralDocField>[] }) =>
+    request<{ success: boolean; data: { clientId: string; enabled: boolean; fields: GeneralDocField[]; updatedAt: string } }>(
+      `/api/admin/clients/${clientId}/general-docs`,
+      { method: "PUT", body: JSON.stringify(body) }
+    ),
+  deleteUpload: (uploadId: string) =>
+    request<{ success: boolean }>(`/api/admin/general-docs/uploads/${uploadId}`, { method: "DELETE" }),
+  getDownloadUrl: (uploadId: string) =>
+    request<{ success: boolean; data: { downloadUrl: string; fileName: string } }>(
+      `/api/admin/general-docs/uploads/${uploadId}/download`
+    ),
+};
+
+// ─── Admin — On-Boarding Details ─────────────────────────────────────────────
+export type OnboardingField = {
+  key: string;
+  label: string;
+  type: string; // text | textarea | number | date | select | ack | group
+  required?: boolean;
+  placeholder?: string;
+  remarkLabel?: string;
+  options?: string[];
+  repeatable?: boolean;
+  minItems?: number;
+  itemLabel?: string;
+  fields?: OnboardingField[];
+};
+export type OnboardingSection = {
+  key: string;
+  title: string;
+  description?: string;
+  fields: OnboardingField[];
+};
+export type OnboardingSchema = {
+  version: number;
+  title: string;
+  subtitle: string;
+  sections: OnboardingSection[];
+};
+export type OnboardingSubmission = {
+  answers: Record<string, unknown>;
+  status: string; // not_started | draft | submitted
+  submittedAt: string | null;
+  updatedAt: string | null;
+};
+export const onboardingAdminApi = {
+  get: (clientId: string) =>
+    request<{ success: boolean; data: { clientId: string; schema: OnboardingSchema; submission: OnboardingSubmission } }>(
+      `/api/admin/clients/${clientId}/onboarding`
+    ),
+};
+
+// ─── Admin — Profiles ─────────────────────────────────────────────────────────
+export const profilesAdminApi = {
+  list: (clientId: string) =>
+    request<{ success: boolean; data: UserProfile[] }>(`/api/admin/clients/${clientId}/profiles`),
+  create: (clientId: string, body: { profileName: string; businessName?: string; profileType?: string; isDefault?: boolean }) =>
+    request<{ success: boolean; data: UserProfile }>(`/api/admin/clients/${clientId}/profiles`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  update: (profileId: string, body: { profileName?: string; businessName?: string; isDefault?: boolean }) =>
+    request<{ success: boolean; data: UserProfile }>(`/api/admin/profiles/${profileId}`, {
+      method: "PATCH", body: JSON.stringify(body),
+    }),
+  delete: (profileId: string) =>
+    request<{ success: boolean }>(`/api/admin/profiles/${profileId}`, { method: "DELETE" }),
 };
 
 // ─── Client — Forms ──────────────────────────────────────────────────────────

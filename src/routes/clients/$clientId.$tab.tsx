@@ -1,7 +1,8 @@
 import { createFileRoute, useParams, Link } from "@tanstack/react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore, uid } from "@/store/useAppStore";
-import { clientsApi, tasksApi, metaApi, ADMIN_STATUSES, type ApiTask, type AdminStatus, type TaskTypeInfo } from "@/lib/api";
+import { clientsApi, tasksApi, metaApi, generalDocsAdminApi, profilesAdminApi, onboardingAdminApi, ADMIN_STATUSES, type ApiTask, type AdminStatus, type TaskTypeInfo, type DocumentTypeCatalogItem, type GeneralDocField, type GeneralDocStatus, type UserProfile, type OnboardingSection, type OnboardingField, type ConfigFieldDef } from "@/lib/api";
+import { GeneralDocsConfig } from "@/components/app/GeneralDocsConfig";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,6 +47,9 @@ function ClientTab() {
     case "transcripts": return <Transcripts clientId={clientId} />;
     case "billing": return <Billing clientId={clientId} />;
     case "time-entries": return <TimeEntries clientId={clientId} />;
+    case "general-docs": return <GeneralDocs clientId={clientId} />;
+    case "onboarding":   return <OnboardingTab clientId={clientId} />;
+    case "profiles":     return <ProfilesTab clientId={clientId} />;
     default: return <Home clientId={clientId} />;
   }
 }
@@ -154,6 +158,82 @@ function Files({ clientId }: { clientId: string }) {
   );
 }
 
+/** Renders one task-type config field with the correct input for its declared type. */
+function ConfigFieldInput({
+  field, value, onChange,
+}: {
+  field: ConfigFieldDef;
+  value: unknown;
+  onChange: (v: unknown) => void;
+}) {
+  const label = (
+    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+      {field.label}{field.required && <span className="text-rose-500"> *</span>}
+    </label>
+  );
+
+  if (field.type === "boolean") {
+    // Yes/No — matches the spec's Yes/No columns (T5, T4A, T5018)
+    return (
+      <div className="flex items-center justify-between gap-2">
+        {label}
+        <select
+          className="border border-border rounded-md h-8 px-2 text-sm bg-background"
+          value={value === true ? "yes" : value === false ? "no" : ""}
+          onChange={(e) => onChange(e.target.value === "" ? null : e.target.value === "yes")}
+        >
+          <option value="">—</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+      </div>
+    );
+  }
+
+  if (field.type === "select") {
+    return (
+      <div>
+        {label}
+        <select
+          className="mt-1 w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
+          value={(value as string) ?? ""}
+          onChange={(e) => onChange(e.target.value || null)}
+        >
+          <option value="">Select…</option>
+          {(field.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+      </div>
+    );
+  }
+
+  if (field.type === "textarea") {
+    return (
+      <div>
+        {label}
+        <Textarea
+          className="mt-1"
+          rows={2}
+          value={(value as string) ?? ""}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      </div>
+    );
+  }
+
+  // text | number | date | password
+  return (
+    <div>
+      {label}
+      <Input
+        className="mt-1"
+        type={field.type === "number" ? "number" : field.type === "date" ? "date" : field.type === "password" ? "password" : "text"}
+        value={(value as string) ?? ""}
+        onChange={(e) => onChange(field.type === "number" ? (e.target.value === "" ? null : Number(e.target.value)) : e.target.value)}
+      />
+    </div>
+  );
+}
+
 function Tasks({ clientId }: { clientId: string }) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -165,12 +245,35 @@ function Tasks({ clientId }: { clientId: string }) {
   });
   const [updatingId, setUpdatingId] = useState<string | null>(null);
 
+  // Task-type config values (e.g. Payroll: nextPayDate, payrollFrequency, WCB…)
+  const [config, setConfig] = useState<Record<string, unknown>>({});
+  const setConfigValue = (key: string, value: unknown) =>
+    setConfig((prev) => ({ ...prev, [key]: value }));
+
+  // key → quantity of documents the client must upload for this task (0/absent = not required)
+  const [docReqs, setDocReqs] = useState<Record<string, number>>({});
+
   const { data: taskTypesRes } = useQuery({
     queryKey: ["task-types"],
     queryFn: () => metaApi.getTaskTypes(),
     staleTime: 60_000,
   });
   const workflowTypes: TaskTypeInfo[] = taskTypesRes?.data ?? [];
+
+  const { data: docTypesRes } = useQuery({
+    queryKey: ["document-types"],
+    queryFn: () => metaApi.getDocumentTypes(),
+    staleTime: 60_000,
+  });
+  const docCatalog: DocumentTypeCatalogItem[] = docTypesRes?.data?.all ?? [];
+
+  const setDocQty = (key: string, qty: number) =>
+    setDocReqs((prev) => {
+      const next = { ...prev };
+      if (qty > 0) next[key] = Math.min(50, qty);
+      else delete next[key];
+      return next;
+    });
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["client-tasks", clientId],
@@ -182,18 +285,53 @@ function Tasks({ clientId }: { clientId: string }) {
   const active = tasks.filter((t) => t.status !== "complete");
   const done = tasks.filter((t) => t.status === "complete");
 
+  // The config schema for the currently selected workflow task type (empty for non-workflow types)
+  const activeSchema = workflowTypes.find((t) => t.key === form.taskType)?.configSchema ?? [];
+
+  // Whether a config field should render given its dependsOn rule
+  const configFieldVisible = (f: ConfigFieldDef): boolean => {
+    if (!f.dependsOn) return true;
+    return config[f.dependsOn.field] === f.dependsOn.value;
+  };
+
   const handleCreate = async () => {
     if (!form.title.trim()) { toast.error("Task title is required"); return; }
+
+    // Validate required config fields (that are currently visible)
+    const missing = activeSchema
+      .filter((f) => f.required && configFieldVisible(f))
+      .filter((f) => { const v = config[f.key]; return v === undefined || v === null || v === ""; });
+    if (missing.length) {
+      toast.error(`Please fill: ${missing.map((f) => f.label).join(", ")}`);
+      return;
+    }
+
     try {
+      const documentRequirements = Object.entries(docReqs)
+        .filter(([, qty]) => qty > 0)
+        .map(([key, quantity]) => ({ key, quantity }));
+
+      // Only send config values for fields that belong to (and are visible for) this task type
+      const configPayload: Record<string, unknown> = {};
+      for (const f of activeSchema) {
+        if (configFieldVisible(f) && config[f.key] !== undefined && config[f.key] !== "") {
+          configPayload[f.key] = config[f.key];
+        }
+      }
+
       await tasksApi.create(clientId, {
         title: form.title,
         description: form.description || undefined,
         taskType: form.taskType,
         adminStatus: form.adminStatus,
+        documentRequirements: documentRequirements.length ? documentRequirements : undefined,
+        config: Object.keys(configPayload).length ? configPayload : undefined,
       });
       toast.success("Task assigned to client");
       setOpen(false);
       setForm({ title: "", taskType: "CORPORATE_TAX_RETURN", adminStatus: "Data not received", description: "" });
+      setConfig({});
+      setDocReqs({});
       queryClient.invalidateQueries({ queryKey: ["client-tasks", clientId] });
       queryClient.invalidateQueries({ queryKey: ["admin-tasks"] });
     } catch (err: unknown) {
@@ -342,6 +480,7 @@ function Tasks({ clientId }: { clientId: string }) {
                 onChange={(e) => {
                   const taskType = e.target.value;
                   const wf = workflowTypes.find((t) => t.key === taskType);
+                  setConfig({}); // reset config values when task type changes
                   setForm((f) => ({
                     ...f,
                     taskType,
@@ -377,6 +516,65 @@ function Tasks({ clientId }: { clientId: string }) {
               <Textarea placeholder="Instructions shown to the client…" value={form.description}
                 onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} className="mt-1" />
             </div>
+
+            {/* ── Task-type config fields (e.g. Payroll: pay date, frequency, WCB…) ── */}
+            {activeSchema.length > 0 && (
+              <div className="rounded-md border border-border p-3 space-y-3 bg-muted/30">
+                <div className="text-xs font-semibold text-foreground uppercase tracking-wide">
+                  {workflowTypes.find((t) => t.key === form.taskType)?.displayName} details
+                </div>
+                {activeSchema.filter(configFieldVisible).map((f) => (
+                  <ConfigFieldInput
+                    key={f.key}
+                    field={f}
+                    value={config[f.key]}
+                    onChange={(v) => setConfigValue(f.key, v)}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* ── Required documents (upload fields shown to the client) ── */}
+            {docCatalog.length > 0 && (
+              <div>
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Required documents ({Object.keys(docReqs).length} selected)
+                </label>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Pick which files the client must upload and how many of each.
+                </p>
+                <div className="mt-2 max-h-48 overflow-y-auto border border-border rounded-md divide-y divide-border">
+                  {docCatalog.map((doc) => {
+                    const qty = docReqs[doc.key] ?? 0;
+                    const selected = qty > 0;
+                    return (
+                      <div key={doc.key} className="flex items-center gap-2 px-2.5 py-1.5">
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={(e) => setDocQty(doc.key, e.target.checked ? Math.max(1, qty) : 0)}
+                          className="h-4 w-4 accent-primary"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm truncate">{doc.label}</div>
+                          {doc.group === "sales" && <div className="text-[10px] text-muted-foreground">Sales</div>}
+                        </div>
+                        <input
+                          type="number"
+                          min={1}
+                          max={50}
+                          value={selected ? qty : ""}
+                          disabled={!selected}
+                          onChange={(e) => setDocQty(doc.key, Number(e.target.value) || 0)}
+                          placeholder="0"
+                          className="w-14 h-7 text-sm text-center border border-border rounded bg-background disabled:opacity-40"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
@@ -412,6 +610,349 @@ function Billing({ clientId }: { clientId: string }) {
         <table className="w-full text-sm"><thead className="text-xs uppercase text-muted-foreground bg-muted/40"><tr><th className="text-left px-4 py-2">Invoice #</th><th className="text-left px-4 py-2">Date</th><th className="text-left px-4 py-2">Description</th><th className="text-right px-4 py-2">Amount</th><th className="text-left px-4 py-2 pl-6">Status</th></tr></thead>
           <tbody>{items.map((b) => <tr key={b.id} className="border-b border-border last:border-0"><td className="px-4 py-2.5 font-medium">{b.invoiceNumber}</td><td className="px-4 py-2.5">{fmtDate(b.date)}</td><td className="px-4 py-2.5">{b.description}</td><td className="px-4 py-2.5 text-right">{fmtMoney(b.amount)}</td><td className="px-4 py-2.5 pl-6"><StatusBadge status={b.status} /></td></tr>)}</tbody></table>
       </Card>
+    </div>
+  );
+}
+
+// ── On-Boarding Details tab (read-only view of client's submission) ─────────────
+function OnboardingTab({ clientId }: { clientId: string }) {
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ["client-onboarding", clientId],
+    queryFn:  () => onboardingAdminApi.get(clientId),
+  });
+
+  if (isLoading) return (
+    <Card className="p-5"><div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div></Card>
+  );
+  if (isError) return (
+    <Card className="p-5"><div className="flex flex-col items-center gap-3 py-8 text-muted-foreground"><WifiOff className="h-8 w-8" /><p>Could not load onboarding details.</p><Button variant="outline" size="sm" onClick={() => refetch()}>Retry</Button></div></Card>
+  );
+
+  const schema = data?.data.schema;
+  const sub = data?.data.submission;
+  const answers = (sub?.answers ?? {}) as Record<string, unknown>;
+  const status = sub?.status ?? "not_started";
+
+  const renderValue = (f: OnboardingField) => {
+    const v = answers[f.key];
+    if (f.type === "ack") {
+      const m = (v ?? {}) as { confirmed?: boolean; remark?: string };
+      return (
+        <span>
+          <span className={m.confirmed ? "text-emerald-600 font-medium" : "text-muted-foreground"}>{m.confirmed ? "Confirmed" : "Not confirmed"}</span>
+          {m.remark ? <span className="text-muted-foreground"> — {m.remark}</span> : null}
+        </span>
+      );
+    }
+    if (f.type === "group") {
+      const items = Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
+      if (!items.length) return <span className="text-muted-foreground">—</span>;
+      return (
+        <div className="space-y-2 mt-1">
+          {items.map((item, i) => (
+            <div key={i} className="rounded-md border border-border p-2 bg-muted/30">
+              <div className="text-[10px] uppercase font-semibold text-muted-foreground mb-1">{f.itemLabel ?? "Item"} {i + 1}</div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                {(f.fields ?? []).map((sub2) => (
+                  <div key={sub2.key}><span className="text-muted-foreground">{sub2.label}: </span>{String(item[sub2.key] ?? "") || "—"}</div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+    const s = v === undefined || v === null ? "" : String(v);
+    return <span>{s || <span className="text-muted-foreground">—</span>}</span>;
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card className="p-5">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold">On-Boarding Details</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">Submitted by the client from the app.</p>
+          </div>
+          <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${status === "submitted" ? "bg-emerald-50 text-emerald-700" : status === "draft" ? "bg-amber-50 text-amber-700" : "bg-muted text-muted-foreground"}`}>
+            {status === "submitted" ? "Submitted" : status === "draft" ? "Draft (in progress)" : "Not started"}
+          </span>
+        </div>
+      </Card>
+
+      {status === "not_started" ? (
+        <Card className="p-5"><EmptyState icon={FileQuestion} title="Nothing submitted yet" description="The client has not filled in their on-boarding details." /></Card>
+      ) : (
+        (schema?.sections ?? []).map((section: OnboardingSection) => (
+          <Card key={section.key} className="p-5">
+            <h4 className="font-semibold mb-3">{section.title}</h4>
+            <div className="space-y-3">
+              {section.fields.map((f) => (
+                <div key={f.key} className="grid grid-cols-1 sm:grid-cols-[240px_1fr] gap-1 sm:gap-4 text-sm border-b border-border last:border-0 pb-3 last:pb-0">
+                  <div className="text-muted-foreground">{f.label}</div>
+                  <div className="text-foreground">{renderValue(f)}</div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        ))
+      )}
+    </div>
+  );
+}
+
+// ── General Documentation tab ──────────────────────────────────────────────────
+function GeneralDocs({ clientId }: { clientId: string }) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<{ enabled: boolean; fields: Partial<GeneralDocField>[] }>({ enabled: true, fields: [] });
+
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ["client-general-docs", clientId],
+    queryFn:  () => generalDocsAdminApi.get(clientId),
+  });
+
+  const status = data?.data as (GeneralDocStatus & { config: { enabled: boolean; fields: GeneralDocField[]; updatedAt: string } | null; uploads: Array<{ id: string; fieldKey: string; slotIndex: number; fileName: string; originalFilename: string; fileType: string | null; uploadedAt: string }> }) | undefined;
+
+  const saveMutation = useMutation({
+    mutationFn: () => generalDocsAdminApi.save(clientId, draft),
+    onSuccess: () => {
+      toast.success("General documentation config saved");
+      setEditing(false);
+      qc.invalidateQueries({ queryKey: ["client-general-docs", clientId] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (uploadId: string) => generalDocsAdminApi.deleteUpload(uploadId),
+    onSuccess: () => {
+      toast.success("Upload deleted");
+      qc.invalidateQueries({ queryKey: ["client-general-docs", clientId] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const startEdit = () => {
+    setDraft({
+      enabled: status?.enabled ?? true,
+      fields:  status?.config?.fields ?? [],
+    });
+    setEditing(true);
+  };
+
+  const overallColor = {
+    submitted:   "bg-emerald-50 text-emerald-700",
+    partial:     "bg-amber-50 text-amber-700",
+    pending:     "bg-slate-100 text-slate-600",
+    not_required: "bg-slate-100 text-slate-400",
+  }[status?.overall ?? "pending"] ?? "bg-slate-100 text-slate-600";
+
+  if (isLoading) return <div className="flex justify-center py-10 text-muted-foreground"><Loader2 className="w-4 h-4 animate-spin mr-2" />Loading…</div>;
+  if (isError) return (
+    <div className="text-center py-10"><div className="text-destructive mb-2">Failed to load</div><Button size="sm" onClick={() => refetch()}>Retry</Button></div>
+  );
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="font-semibold">General Documentation</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Pre-task document checklist configured for this client
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {status?.overall && (
+            <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${overallColor}`}>
+              {status.overall === "submitted" ? "All submitted" :
+               status.overall === "partial"   ? "Partial uploads" :
+               status.overall === "not_required" ? "Not configured" : "Pending"}
+            </span>
+          )}
+          {!editing && (
+            <Button size="sm" variant="outline" onClick={startEdit}>
+              {status?.config ? "Edit Config" : "Configure"}
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Config editor */}
+      {editing ? (
+        <Card className="p-4">
+          <GeneralDocsConfig value={draft} onChange={setDraft} />
+          <div className="flex justify-end gap-2 mt-4 pt-4 border-t">
+            <Button variant="outline" onClick={() => setEditing(false)}>Cancel</Button>
+            <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
+              {saveMutation.isPending ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" />Saving…</> : "Save Configuration"}
+            </Button>
+          </div>
+        </Card>
+      ) : !status?.enabled ? (
+        <Card className="p-8 text-center text-muted-foreground">
+          <p className="text-sm">General Documentation is not configured for this client.</p>
+          <Button size="sm" className="mt-3" onClick={startEdit}>Configure</Button>
+        </Card>
+      ) : (
+        <>
+          {/* Fields + uploads */}
+          <div className="space-y-3">
+            {(status?.fields ?? []).map((field) => (
+              <Card key={field.key} className="p-4">
+                <div className="flex items-start justify-between mb-3">
+                  <div>
+                    <p className="font-medium text-sm">{field.name}</p>
+                    {field.notes && <p className="text-xs text-muted-foreground mt-0.5">{field.notes}</p>}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                      field.status === "complete" ? "bg-emerald-50 text-emerald-700" :
+                      field.status === "optional" ? "bg-slate-100 text-slate-500" :
+                      "bg-amber-50 text-amber-700"
+                    }`}>
+                      {field.status === "complete" ? `${field.uploadedCount}/${field.maxCount} uploaded` :
+                       field.status === "optional" ? "Optional" :
+                       `${field.pendingCount} pending`}
+                    </span>
+                    {field.required && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-600 font-medium">Required</span>
+                    )}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                  {field.slots.map((slot) => (
+                    <div key={slot.slotIndex} className={`border rounded-md p-2.5 text-xs ${
+                      slot.status === "uploaded" ? "bg-emerald-50 border-emerald-200" : "bg-muted/50 border-dashed"
+                    }`}>
+                      <div className="font-medium mb-1 text-muted-foreground">Slot {slot.slotIndex}</div>
+                      {slot.uploadedFile ? (
+                        <div className="space-y-1">
+                          <p className="truncate font-medium" title={slot.uploadedFile.originalFilename}>
+                            {slot.uploadedFile.originalFilename}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground">
+                            {new Date(slot.uploadedFile.uploadedAt).toLocaleDateString()}
+                          </p>
+                          <div className="flex gap-1 mt-1">
+                            <button
+                              className="text-primary hover:underline text-[10px]"
+                              onClick={async () => {
+                                try {
+                                  const r = await generalDocsAdminApi.getDownloadUrl(slot.uploadedFile!.id);
+                                  window.open(r.data.downloadUrl, "_blank");
+                                } catch { toast.error("Could not load download URL"); }
+                              }}
+                            >Preview</button>
+                            <span className="text-muted-foreground">·</span>
+                            <button
+                              className="text-destructive hover:underline text-[10px]"
+                              onClick={() => {
+                                if (confirm("Delete this upload?")) deleteMutation.mutate(slot.uploadedFile!.id);
+                              }}
+                            >Delete</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-muted-foreground">Not uploaded</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Profiles tab ───────────────────────────────────────────────────────────────
+function ProfilesTab({ clientId }: { clientId: string }) {
+  const qc = useQueryClient();
+  const [showAdd, setShowAdd] = useState(false);
+  const [newProfile, setNewProfile] = useState({ profileName: "", businessName: "", profileType: "business" });
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["client-profiles", clientId],
+    queryFn: () => profilesAdminApi.list(clientId),
+  });
+  const profiles: UserProfile[] = data?.data ?? [];
+
+  const addMutation = useMutation({
+    mutationFn: () => profilesAdminApi.create(clientId, { ...newProfile }),
+    onSuccess: () => {
+      toast.success("Profile added");
+      setShowAdd(false);
+      setNewProfile({ profileName: "", businessName: "", profileType: "business" });
+      qc.invalidateQueries({ queryKey: ["client-profiles", clientId] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => profilesAdminApi.delete(id),
+    onSuccess: () => { toast.success("Profile removed"); qc.invalidateQueries({ queryKey: ["client-profiles", clientId] }); },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  if (isLoading) return <div className="flex justify-center py-10"><Loader2 className="w-4 h-4 animate-spin" /></div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <div>
+          <h3 className="font-semibold">Business Profiles</h3>
+          <p className="text-xs text-muted-foreground">Manage multiple business contexts for this client</p>
+        </div>
+        <Button size="sm" onClick={() => setShowAdd(true)}><Plus className="w-4 h-4 mr-1" />Add Profile</Button>
+      </div>
+
+      <div className="space-y-2">
+        {profiles.map((p) => (
+          <Card key={p.id} className="p-4 flex items-center justify-between">
+            <div>
+              <p className="font-medium text-sm">{p.profileName}</p>
+              {p.businessName && <p className="text-xs text-muted-foreground">{p.businessName}</p>}
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground capitalize">{p.profileType}</span>
+                {p.isDefault && <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium">Default</span>}
+              </div>
+            </div>
+            {!p.isDefault && (
+              <button
+                className="text-xs text-destructive hover:underline"
+                onClick={() => { if (confirm("Remove this profile?")) deleteMutation.mutate(p.id); }}
+              >Remove</button>
+            )}
+          </Card>
+        ))}
+        {profiles.length === 0 && (
+          <Card className="p-6 text-center text-muted-foreground text-sm">
+            No profiles configured. Add one to enable profile selection.
+          </Card>
+        )}
+      </div>
+
+      {showAdd && (
+        <Card className="p-4 space-y-3">
+          <p className="text-sm font-medium">New Profile</p>
+          <div className="space-y-2">
+            <Input placeholder="Profile name (e.g. Main Business)" value={newProfile.profileName}
+              onChange={(e) => setNewProfile({ ...newProfile, profileName: e.target.value })} />
+            <Input placeholder="Business name (optional)" value={newProfile.businessName}
+              onChange={(e) => setNewProfile({ ...newProfile, businessName: e.target.value })} />
+          </div>
+          <div className="flex gap-2 justify-end">
+            <Button variant="outline" size="sm" onClick={() => setShowAdd(false)}>Cancel</Button>
+            <Button size="sm" onClick={() => addMutation.mutate()} disabled={addMutation.isPending || !newProfile.profileName.trim()}>
+              {addMutation.isPending ? "Adding…" : "Add Profile"}
+            </Button>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

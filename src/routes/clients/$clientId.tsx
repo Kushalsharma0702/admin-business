@@ -1,27 +1,43 @@
-import { createFileRoute, Link, Outlet, useParams, useRouterState } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { createFileRoute, Link, Outlet, useNavigate, useParams, useRouterState } from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app/AppShell";
 import { clientsApi } from "@/lib/api";
 import { ClientAvatar } from "@/components/app/ClientAvatar";
-import { Star, Copy, Pencil, Loader2 } from "lucide-react";
+import { Star, Copy, Pencil, Loader2, Trash2 } from "lucide-react";
 import { fmtDate } from "@/components/app/utils";
 import { toast } from "sonner";
+import { useState } from "react";
 
 export const Route = createFileRoute("/clients/$clientId")({ component: ClientLayout });
 
 const tabs = [
-  ["home", "Home"], ["communication", "Communication"], ["notes", "Notes"], ["files", "Files"],
-  ["tasks", "Tasks"], ["resolution-cases", "Resolution Cases"], ["organizers", "Organizers"],
+  ["home", "Home"], ["onboarding", "On-Boarding"], ["general-docs", "General Docs"], ["tasks", "Tasks"],
+  ["communication", "Communication"], ["notes", "Notes"], ["files", "Files"],
+  ["resolution-cases", "Resolution Cases"], ["organizers", "Organizers"],
   ["transcripts", "Transcripts"], ["billing", "Billing"], ["time-entries", "Time Entries"],
+  ["profiles", "Profiles"],
 ] as const;
 
 function ClientLayout() {
   const { clientId } = useParams({ from: "/clients/$clientId" });
   const path = useRouterState({ select: (s) => s.location.pathname });
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const { data: res, isLoading, isError } = useQuery({
     queryKey: ["client", clientId],
     queryFn: () => clientsApi.get(clientId),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: () => clientsApi.delete(clientId),
+    onSuccess: () => {
+      toast.success("Client deleted");
+      qc.invalidateQueries({ queryKey: ["clients"] });
+      navigate({ to: "/clients" });
+    },
+    onError: () => toast.error("Failed to delete client"),
   });
 
   if (isLoading) return (
@@ -104,7 +120,40 @@ function ClientLayout() {
               <Field label="Created on" value={fmtDate(client.createdAt)} />
             </div>
           </div>
+          <button
+            onClick={() => setConfirmOpen(true)}
+            className="w-full flex items-center justify-center gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors"
+          >
+            <Trash2 className="w-3.5 h-3.5" /> Delete Client
+          </button>
         </aside>
+
+        {confirmOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="bg-card rounded-xl border border-border shadow-xl w-full max-w-sm mx-4 p-6">
+              <h2 className="text-base font-semibold mb-1">Delete client?</h2>
+              <p className="text-sm text-muted-foreground mb-5">
+                This will permanently delete <span className="font-medium text-foreground">{client.name}</span> and all their data from the database. This cannot be undone.
+              </p>
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => setConfirmOpen(false)}
+                  className="px-4 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => { setConfirmOpen(false); deleteMutation.mutate(); }}
+                  disabled={deleteMutation.isPending}
+                  className="px-4 py-2 text-sm rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors disabled:opacity-60 flex items-center gap-2"
+                >
+                  {deleteMutation.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  Yes, delete permanently
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         <div><Outlet /></div>
       </div>
     </AppShell>

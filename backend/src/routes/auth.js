@@ -116,10 +116,16 @@ router.post("/accept-invite", async (req, res) => {
       const nameParts = (row.name || "").trim().split(/\s+/);
       const firstName = nameParts[0] || "";
       const lastName = nameParts.slice(1).join(" ") || "";
+      // Remove any stale record with the same email but a different UUID (e.g. re-invited user)
+      // so the Flutter DB UUID always matches the taxease_admin UUID.
+      await db.mainQuery(
+        `DELETE FROM users WHERE email=LOWER($1) AND id != $2`,
+        [row.email, row.user_id]
+      );
       await db.mainQuery(
         `INSERT INTO users (id, email, first_name, last_name, phone, password_hash, email_verified, is_active, customer_type, created_at, updated_at)
          VALUES ($1, LOWER($2), $3, $4, $5, $6, TRUE, TRUE, 'BusinessTax', NOW(), NOW())
-         ON CONFLICT (email) DO UPDATE SET
+         ON CONFLICT (id) DO UPDATE SET
            password_hash = EXCLUDED.password_hash,
            customer_type = 'BusinessTax',
            email_verified = TRUE,

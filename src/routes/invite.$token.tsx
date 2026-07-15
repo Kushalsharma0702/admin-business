@@ -15,8 +15,9 @@ type InviteState = "loading" | "valid" | "used" | "expired" | "invalid" | "succe
 // Actual Android package name from android/app/build.gradle.kts: applicationId = "com.aurocode.tax_ease"
 const PACKAGE_NAME = "com.aurocode.tax_ease";
 const APP_STORE_URL = `https://play.google.com/store/apps/details?id=${PACKAGE_NAME}`;
-// Android Intent URL — correct package name, falls back to Play Store if app not installed
-const INTENT_URL = `intent://tax-forms/business#Intent;scheme=diamondaccounts;package=${PACKAGE_NAME};S.browser_fallback_url=${encodeURIComponent(APP_STORE_URL)};end`;
+// Opens the app directly at the Login page — Flutter then resolves customer_type from the
+// business backend after login and routes to the correct dashboard (T2 vs T1).
+const INTENT_URL = `intent://login#Intent;scheme=diamondaccounts;package=${PACKAGE_NAME};S.browser_fallback_url=${encodeURIComponent(APP_STORE_URL)};end`;
 
 function SuccessCard({ clientEmail, clientName }: { clientEmail: string; clientName: string }) {
   // Android Chrome BLOCKS window.location.href deep links from JS (security policy).
@@ -60,7 +61,7 @@ function SuccessCard({ clientEmail, clientName }: { clientEmail: string; clientN
           Open Diamond Accounts App
         </button>
         <p className="text-slate-500 text-xs">
-          The app will open on the Business Tax (T2) form.{" "}
+          The app will open at the login screen.{" "}
           <a href={APP_STORE_URL} className="text-primary underline">
             Don't have the app? Download it here.
           </a>
@@ -72,8 +73,8 @@ function SuccessCard({ clientEmail, clientName }: { clientEmail: string; clientN
         <p className="text-xs text-slate-400 font-semibold mb-2 uppercase tracking-wide">Once in the app</p>
         <ol className="space-y-1.5 text-xs text-slate-300">
           <li className="flex gap-2"><span className="text-primary font-bold">1.</span>Log in with your email and password</li>
-          <li className="flex gap-2"><span className="text-primary font-bold">2.</span>The T2 Business Tax form opens automatically</li>
-          <li className="flex gap-2"><span className="text-primary font-bold">3.</span>Fill in your business details</li>
+          <li className="flex gap-2"><span className="text-primary font-bold">2.</span>The app automatically opens your Business Tax (T2) dashboard</li>
+          <li className="flex gap-2"><span className="text-primary font-bold">3.</span>Fill in your business details and complete assigned tasks</li>
         </ol>
       </div>
     </Card>
