@@ -1,7 +1,7 @@
 import { createFileRoute, useParams, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore, uid } from "@/store/useAppStore";
-import { clientsApi, tasksApi, metaApi, generalDocsAdminApi, profilesAdminApi, onboardingAdminApi, ADMIN_STATUSES, type ApiTask, type AdminStatus, type TaskTypeInfo, type DocumentTypeCatalogItem, type GeneralDocField, type GeneralDocStatus, type UserProfile, type OnboardingSection, type OnboardingField, type ConfigFieldDef } from "@/lib/api";
+import { clientsApi, tasksApi, metaApi, generalDocsAdminApi, profilesAdminApi, onboardingAdminApi, clientTakeOnAdminApi, ADMIN_STATUSES, type ApiTask, type AdminStatus, type TaskTypeInfo, type GeneralDocField, type GeneralDocStatus, type UserProfile, type OnboardingSection, type OnboardingField, type ConfigFieldDef } from "@/lib/api";
 import { GeneralDocsConfig } from "@/components/app/GeneralDocsConfig";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { EmptyState } from "@/components/app/EmptyState";
 import { StatusBadge } from "@/components/app/StatusBadge";
 import { fmtDate, fmtMoney } from "@/components/app/utils";
 import { Upload, FileText, StickyNote, Scale, FileQuestion, FilePlus, Receipt, Clock, Send, Plus, Loader2, WifiOff } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 
@@ -49,6 +49,7 @@ function ClientTab() {
     case "time-entries": return <TimeEntries clientId={clientId} />;
     case "general-docs": return <GeneralDocs clientId={clientId} />;
     case "onboarding":   return <OnboardingTab clientId={clientId} />;
+    case "client-take-on": return <ClientTakeOnTab clientId={clientId} />;
     case "profiles":     return <ProfilesTab clientId={clientId} />;
     default: return <Home clientId={clientId} />;
   }
@@ -236,6 +237,11 @@ function ConfigFieldInput({
 
 function Tasks({ clientId }: { clientId: string }) {
   const queryClient = useQueryClient();
+  const HST_QUARTERLY_SUBTASK = "Email client for quarterly tax payment";
+  const HST_MAIN_TASK_OPTIONS = [
+    { key: "sales_tax_hst", label: "Sales tax HST" },
+    { key: "hst_quarterly_payment", label: "HST quarterly payment" },
+  ] as const;
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({
     title: "",
@@ -250,8 +256,8 @@ function Tasks({ clientId }: { clientId: string }) {
   const setConfigValue = (key: string, value: unknown) =>
     setConfig((prev) => ({ ...prev, [key]: value }));
 
-  // key → quantity of documents the client must upload for this task (0/absent = not required)
-  const [docReqs, setDocReqs] = useState<Record<string, number>>({});
+  const [selectedSubtasks, setSelectedSubtasks] = useState<string[]>([]);
+  const [hstMainTasks, setHstMainTasks] = useState<string[]>(HST_MAIN_TASK_OPTIONS.map((o) => o.key));
 
   const { data: taskTypesRes } = useQuery({
     queryKey: ["task-types"],
@@ -260,20 +266,19 @@ function Tasks({ clientId }: { clientId: string }) {
   });
   const workflowTypes: TaskTypeInfo[] = taskTypesRes?.data ?? [];
 
-  const { data: docTypesRes } = useQuery({
-    queryKey: ["document-types"],
-    queryFn: () => metaApi.getDocumentTypes(),
-    staleTime: 60_000,
-  });
-  const docCatalog: DocumentTypeCatalogItem[] = docTypesRes?.data?.all ?? [];
-
-  const setDocQty = (key: string, qty: number) =>
-    setDocReqs((prev) => {
-      const next = { ...prev };
-      if (qty > 0) next[key] = Math.min(50, qty);
-      else delete next[key];
-      return next;
-    });
+  const ALLOWED_TASK_KEYS = ["CORPORATE_TAX_RETURN", "HST", "BOOKKEEPING", "PAYROLL"];
+  const allowedWorkflowTypes = workflowTypes.filter((t) => ALLOWED_TASK_KEYS.includes(t.key));
+  const activeSubtasks = allowedWorkflowTypes.find((t) => t.key === form.taskType)?.subtasks ?? [];
+  const availableSubtasks = useMemo(() => {
+    if (form.taskType !== "HST") return activeSubtasks;
+    const hstSalesSubtasks = activeSubtasks.filter((s) => s !== HST_QUARTERLY_SUBTASK);
+    const out: string[] = [];
+    if (hstMainTasks.includes("sales_tax_hst")) out.push(...hstSalesSubtasks);
+    if (hstMainTasks.includes("hst_quarterly_payment") && activeSubtasks.includes(HST_QUARTERLY_SUBTASK)) {
+      out.push(HST_QUARTERLY_SUBTASK);
+    }
+    return out;
+  }, [form.taskType, activeSubtasks, hstMainTasks]);
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["client-tasks", clientId],
@@ -288,8 +293,26 @@ function Tasks({ clientId }: { clientId: string }) {
   // The config schema for the currently selected workflow task type (empty for non-workflow types)
   const activeSchema = workflowTypes.find((t) => t.key === form.taskType)?.configSchema ?? [];
 
+  useEffect(() => {
+    if (!open) return;
+    if (selectedSubtasks.length > 0) return;
+    if (availableSubtasks.length > 0) setSelectedSubtasks(availableSubtasks);
+  }, [open, selectedSubtasks.length, availableSubtasks]);
+
+  useEffect(() => {
+    setSelectedSubtasks((prev) => {
+      const filtered = prev.filter((s) => availableSubtasks.includes(s));
+      if (filtered.length === prev.length && filtered.every((v, i) => v === prev[i])) return prev;
+      return filtered;
+    });
+  }, [availableSubtasks.join("||")]);
+
   // Whether a config field should render given its dependsOn rule
   const configFieldVisible = (f: ConfigFieldDef): boolean => {
+    // Shared installment fields must work for both T2 and HST flows.
+    if (f.key === "taxYearEnd" || f.key === "taxAmount") {
+      return config.craInstallmentInT2 === true || config.craInstallmentInHST === true;
+    }
     if (!f.dependsOn) return true;
     return config[f.dependsOn.field] === f.dependsOn.value;
   };
@@ -305,12 +328,12 @@ function Tasks({ clientId }: { clientId: string }) {
       toast.error(`Please fill: ${missing.map((f) => f.label).join(", ")}`);
       return;
     }
+    if (availableSubtasks.length > 0 && selectedSubtasks.length === 0) {
+      toast.error("Select at least one subtask");
+      return;
+    }
 
     try {
-      const documentRequirements = Object.entries(docReqs)
-        .filter(([, qty]) => qty > 0)
-        .map(([key, quantity]) => ({ key, quantity }));
-
       // Only send config values for fields that belong to (and are visible for) this task type
       const configPayload: Record<string, unknown> = {};
       for (const f of activeSchema) {
@@ -323,15 +346,16 @@ function Tasks({ clientId }: { clientId: string }) {
         title: form.title,
         description: form.description || undefined,
         taskType: form.taskType,
+        selectedSubtasks,
         adminStatus: form.adminStatus,
-        documentRequirements: documentRequirements.length ? documentRequirements : undefined,
         config: Object.keys(configPayload).length ? configPayload : undefined,
       });
       toast.success("Task assigned to client");
       setOpen(false);
       setForm({ title: "", taskType: "CORPORATE_TAX_RETURN", adminStatus: "Data not received", description: "" });
       setConfig({});
-      setDocReqs({});
+      setHstMainTasks(HST_MAIN_TASK_OPTIONS.map((o) => o.key));
+      setSelectedSubtasks([]);
       queryClient.invalidateQueries({ queryKey: ["client-tasks", clientId] });
       queryClient.invalidateQueries({ queryKey: ["admin-tasks"] });
     } catch (err: unknown) {
@@ -377,7 +401,13 @@ function Tasks({ clientId }: { clientId: string }) {
   return (
     <div className="space-y-6">
       <div className="flex justify-end">
-        <Button onClick={() => setOpen(true)}><Plus className="w-4 h-4 mr-1" />Assign task</Button>
+        <Button onClick={() => {
+          if (form.taskType === "HST") {
+            setHstMainTasks(HST_MAIN_TASK_OPTIONS.map((o) => o.key));
+          }
+          setSelectedSubtasks(availableSubtasks);
+          setOpen(true);
+        }}><Plus className="w-4 h-4 mr-1" />Assign task</Button>
       </div>
 
       {/* ── Active tasks ── */}
@@ -479,29 +509,24 @@ function Tasks({ clientId }: { clientId: string }) {
                 value={form.taskType}
                 onChange={(e) => {
                   const taskType = e.target.value;
-                  const wf = workflowTypes.find((t) => t.key === taskType);
+                  const wf = allowedWorkflowTypes.find((t) => t.key === taskType);
                   setConfig({}); // reset config values when task type changes
+                  if (taskType === "HST") {
+                    setHstMainTasks(HST_MAIN_TASK_OPTIONS.map((o) => o.key));
+                  }
+                  setSelectedSubtasks(wf?.subtasks ?? []);
                   setForm((f) => ({
                     ...f,
                     taskType,
-                    title: wf && (!f.title.trim() || workflowTypes.some((t) => t.displayName === f.title))
+                    title: wf && (!f.title.trim() || allowedWorkflowTypes.some((t) => t.displayName === f.title))
                       ? wf.displayName
                       : f.title,
                   }));
                 }}
               >
-                <optgroup label="Workflow tasks">
-                  {workflowTypes.map((t) => (
-                    <option key={t.key} value={t.key}>{t.displayName}</option>
-                  ))}
-                </optgroup>
-                <optgroup label="Other task types">
-                  <option value="info">Info (read + mark complete)</option>
-                  <option value="onboarding_form">T2 Onboarding Form</option>
-                  <option value="sheet_remarks">Query Sheet Remarks</option>
-                  <option value="basic_docs_upload">Documents Upload</option>
-                  <option value="payroll">Payroll Setup</option>
-                </optgroup>
+                {allowedWorkflowTypes.map((t) => (
+                  <option key={t.key} value={t.key}>{t.displayName}</option>
+                ))}
               </select>
             </div>
             <div>
@@ -534,42 +559,64 @@ function Tasks({ clientId }: { clientId: string }) {
               </div>
             )}
 
-            {/* ── Required documents (upload fields shown to the client) ── */}
-            {docCatalog.length > 0 && (
+            {/* ── HST main task list ── */}
+            {form.taskType === "HST" && (
               <div>
                 <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Required documents ({Object.keys(docReqs).length} selected)
+                  Main task list
                 </label>
                 <p className="text-[11px] text-muted-foreground mt-0.5">
-                  Pick which files the client must upload and how many of each.
+                  Select one or both main tasks.
+                </p>
+                <div className="mt-2 border border-border rounded-md divide-y divide-border">
+                  {HST_MAIN_TASK_OPTIONS.map((opt) => (
+                    <label key={opt.key} className="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 accent-primary"
+                        checked={hstMainTasks.includes(opt.key)}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                            ? Array.from(new Set([...hstMainTasks, opt.key]))
+                            : hstMainTasks.filter((k) => k !== opt.key);
+                          setHstMainTasks(next);
+                        }}
+                      />
+                      <span className="text-sm">{opt.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── Subtask picker ── */}
+            {availableSubtasks.length > 0 && (
+              <div>
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Subtasks ({selectedSubtasks.length} selected)
+                </label>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Select one or more subtasks to add under this task.
                 </p>
                 <div className="mt-2 max-h-48 overflow-y-auto border border-border rounded-md divide-y divide-border">
-                  {docCatalog.map((doc) => {
-                    const qty = docReqs[doc.key] ?? 0;
-                    const selected = qty > 0;
+                  {availableSubtasks.map((subtask) => {
+                    const selected = selectedSubtasks.includes(subtask);
                     return (
-                      <div key={doc.key} className="flex items-center gap-2 px-2.5 py-1.5">
+                      <label key={subtask} className="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={selected}
-                          onChange={(e) => setDocQty(doc.key, e.target.checked ? Math.max(1, qty) : 0)}
+                          onChange={(e) =>
+                            setSelectedSubtasks((prev) =>
+                              e.target.checked
+                                ? Array.from(new Set([...prev, subtask]))
+                                : prev.filter((s) => s !== subtask)
+                            )
+                          }
                           className="h-4 w-4 accent-primary"
                         />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm truncate">{doc.label}</div>
-                          {doc.group === "sales" && <div className="text-[10px] text-muted-foreground">Sales</div>}
-                        </div>
-                        <input
-                          type="number"
-                          min={1}
-                          max={50}
-                          value={selected ? qty : ""}
-                          disabled={!selected}
-                          onChange={(e) => setDocQty(doc.key, Number(e.target.value) || 0)}
-                          placeholder="0"
-                          className="w-14 h-7 text-sm text-center border border-border rounded bg-background disabled:opacity-40"
-                        />
-                      </div>
+                        <div className="text-sm">{subtask}</div>
+                      </label>
                     );
                   })}
                 </div>
@@ -697,6 +744,195 @@ function OnboardingTab({ clientId }: { clientId: string }) {
           </Card>
         ))
       )}
+    </div>
+  );
+}
+
+function ClientTakeOnTab({ clientId }: { clientId: string }) {
+  const qc = useQueryClient();
+  const [answers, setAnswers] = useState<Record<string, unknown>>({});
+  const [editMode, setEditMode] = useState(false);
+
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ["client-take-on", clientId],
+    queryFn: () => clientTakeOnAdminApi.get(clientId),
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: (submit: boolean) => clientTakeOnAdminApi.save(clientId, { answers, submit }),
+    onSuccess: (_res, submit) => {
+      toast.success(submit ? "Client take-on completed. Email notification sent." : "Client take-on draft saved.");
+      setEditMode(false);
+      qc.invalidateQueries({ queryKey: ["client-take-on", clientId] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  if (isLoading) {
+    return <Card className="p-5"><div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div></Card>;
+  }
+  if (isError || !data?.data) {
+    return (
+      <Card className="p-5">
+        <div className="flex flex-col items-center gap-3 py-8 text-muted-foreground">
+          <WifiOff className="h-8 w-8" />
+          <p>Could not load client take-on data.</p>
+          <Button variant="outline" size="sm" onClick={() => refetch()}>Retry</Button>
+        </div>
+      </Card>
+    );
+  }
+
+  const schema = data.data.schema;
+  const submission = data.data.submission;
+  const currentAnswers = editMode ? answers : (submission.answers ?? {});
+  const status = submission.status ?? "not_started";
+
+  const startEdit = () => {
+    setAnswers({ ...(submission.answers ?? {}) });
+    setEditMode(true);
+  };
+
+  const updateAnswer = (key: string, value: unknown) => {
+    setAnswers((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const updateGroup = (key: string, idx: number, subKey: string, value: unknown) => {
+    const items = Array.isArray(answers[key]) ? [...(answers[key] as Record<string, unknown>[])] : [];
+    while (items.length <= idx) items.push({});
+    items[idx] = { ...items[idx], [subKey]: value };
+    updateAnswer(key, items);
+  };
+
+  const addGroupItem = (key: string) => {
+    const items = Array.isArray(answers[key]) ? [...(answers[key] as Record<string, unknown>[])] : [];
+    items.push({});
+    updateAnswer(key, items);
+  };
+
+  const removeGroupItem = (key: string, idx: number) => {
+    const items = Array.isArray(answers[key]) ? [...(answers[key] as Record<string, unknown>[])] : [];
+    items.splice(idx, 1);
+    updateAnswer(key, items);
+  };
+
+  const renderReadOnly = (f: OnboardingField) => {
+    const v = currentAnswers[f.key];
+    if (f.type === "group") {
+      const items = Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
+      if (!items.length) return <span className="text-muted-foreground">—</span>;
+      return (
+        <div className="space-y-2">
+          {items.map((item, i) => (
+            <div key={i} className="rounded-md border border-border p-2 bg-muted/30 text-sm">
+              <div className="text-[10px] uppercase text-muted-foreground mb-1">{f.itemLabel ?? "Item"} {i + 1}</div>
+              {(f.fields ?? []).map((sf) => (
+                <div key={sf.key}><span className="text-muted-foreground">{sf.label}: </span>{String(item[sf.key] ?? "—")}</div>
+              ))}
+            </div>
+          ))}
+        </div>
+      );
+    }
+    return <span className="text-sm">{v === undefined || v === null || String(v).trim() === "" ? <span className="text-muted-foreground">—</span> : String(v)}</span>;
+  };
+
+  const renderEditor = (f: OnboardingField) => {
+    const v = answers[f.key];
+    if (f.type === "textarea") {
+      return <Textarea value={String(v ?? "")} onChange={(e) => updateAnswer(f.key, e.target.value)} rows={3} />;
+    }
+    if (f.type === "select") {
+      return (
+        <select className="w-full border border-border rounded-md h-9 px-2 text-sm bg-background" value={String(v ?? "")} onChange={(e) => updateAnswer(f.key, e.target.value)}>
+          <option value="">Select…</option>
+          {(f.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+      );
+    }
+    if (f.type === "date") {
+      return <Input type="date" value={String(v ?? "")} onChange={(e) => updateAnswer(f.key, e.target.value)} />;
+    }
+    if (f.type === "number") {
+      return <Input type="number" value={String(v ?? "")} onChange={(e) => updateAnswer(f.key, e.target.value === "" ? null : Number(e.target.value))} />;
+    }
+    if (f.type === "group") {
+      const items = Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
+      return (
+        <div className="space-y-2">
+          {items.map((item, i) => (
+            <div key={i} className="rounded-md border border-border p-3 space-y-2">
+              <div className="flex justify-between items-center">
+                <div className="text-xs font-semibold text-muted-foreground uppercase">{f.itemLabel ?? "Item"} {i + 1}</div>
+                <button className="text-xs text-destructive hover:underline" onClick={() => removeGroupItem(f.key, i)}>Remove</button>
+              </div>
+              {(f.fields ?? []).map((sf) => (
+                <div key={sf.key}>
+                  <label className="text-xs text-muted-foreground">{sf.label}</label>
+                  {sf.type === "textarea" ? (
+                    <Textarea className="mt-1" rows={2} value={String(item[sf.key] ?? "")} onChange={(e) => updateGroup(f.key, i, sf.key, e.target.value)} />
+                  ) : sf.type === "select" ? (
+                    <select className="mt-1 w-full border border-border rounded-md h-9 px-2 text-sm bg-background" value={String(item[sf.key] ?? "")} onChange={(e) => updateGroup(f.key, i, sf.key, e.target.value)}>
+                      <option value="">Select…</option>
+                      {(sf.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  ) : (
+                    <Input className="mt-1" value={String(item[sf.key] ?? "")} onChange={(e) => updateGroup(f.key, i, sf.key, e.target.value)} />
+                  )}
+                </div>
+              ))}
+            </div>
+          ))}
+          <Button variant="outline" size="sm" onClick={() => addGroupItem(f.key)}>Add {f.itemLabel ?? "Item"}</Button>
+        </div>
+      );
+    }
+    return <Input value={String(v ?? "")} onChange={(e) => updateAnswer(f.key, e.target.value)} />;
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card className="p-5">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold">Client Take-On</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">Business onboarding capture from the Client Take-On sheet.</p>
+          </div>
+          <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${status === "submitted" ? "bg-emerald-50 text-emerald-700" : status === "draft" ? "bg-amber-50 text-amber-700" : "bg-muted text-muted-foreground"}`}>
+            {status === "submitted" ? "Completed" : status === "draft" ? "Draft" : "Not started"}
+          </span>
+        </div>
+      </Card>
+
+      {schema.sections.map((section: OnboardingSection) => (
+        <Card key={section.key} className="p-5">
+          <h4 className="font-semibold mb-3">{section.title}</h4>
+          <div className="space-y-3">
+            {section.fields.map((f) => (
+              <div key={f.key} className="grid grid-cols-1 sm:grid-cols-[260px_1fr] gap-1 sm:gap-4 text-sm border-b border-border last:border-0 pb-3 last:pb-0">
+                <div className="text-muted-foreground">{f.label}{f.required ? " *" : ""}</div>
+                <div>{editMode ? renderEditor(f) : renderReadOnly(f)}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      ))}
+
+      <div className="flex justify-end gap-2">
+        {!editMode ? (
+          <Button onClick={startEdit}>Edit</Button>
+        ) : (
+          <>
+            <Button variant="outline" onClick={() => setEditMode(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => saveMutation.mutate(false)} disabled={saveMutation.isPending}>
+              Save Draft
+            </Button>
+            <Button onClick={() => saveMutation.mutate(true)} disabled={saveMutation.isPending}>
+              {saveMutation.isPending ? <><Loader2 className="h-4 w-4 animate-spin mr-1" />Saving…</> : "Complete & Notify"}
+            </Button>
+          </>
+        )}
+      </div>
     </div>
   );
 }

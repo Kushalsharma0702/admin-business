@@ -160,9 +160,16 @@ function planFilingTasks(config = {}, today = new Date()) {
   if (config.t2Enabled || config.fiscalYearEnd) {
     for (const p of t2Periods(config, today)) out.push({ taskType: "CORPORATE_TAX_RETURN", ...p });
     for (const p of installmentPeriods(config, today, "craInstallmentInT2", "taxYearEnd", "T2_INSTALLMENT"))
-      out.push({ taskType: "CORPORATE_TAX_RETURN", ...p, isInstallment: true });
+      out.push({ taskType: "CORPORATE_TAX_QUARTERLY_PAYMENT", ...p, isInstallment: true });
   }
-  if (config.salesTaxFrequency) for (const p of hstPeriods(config, today)) out.push({ taskType: "HST", ...p });
+  if (config.salesTaxFrequency) {
+    for (const p of hstPeriods(config, today)) {
+      const taskType = p.periodKey.startsWith("HST_INSTALLMENT:")
+        ? "HST_QUARTERLY_PAYMENT"
+        : "HST";
+      out.push({ taskType, ...p });
+    }
+  }
   if (config.bookkeepingFrequency) for (const p of bookkeepingPeriods(config, today)) out.push({ taskType: "BOOKKEEPING", ...p });
   return out;
 }

@@ -29,7 +29,9 @@ export type AdminStatus = (typeof ADMIN_STATUSES)[number];
 
 export const TASK_TYPES = [
   "CORPORATE_TAX_RETURN", "HST", "BOOKKEEPING", "PAYROLL",
-  "PD7A", "WCB", "T4", "T4A", "T5018", "T5", "CUSTOM",
+  "PD7A", "WCB", "T4", "T4A", "T5018", "T5",
+  "CORPORATE_TAX_QUARTERLY_PAYMENT", "HST_QUARTERLY_PAYMENT",
+  "CUSTOM",
 ] as const;
 
 export type TaskType = (typeof TASK_TYPES)[number];
@@ -332,6 +334,7 @@ export const tasksApi = {
   create: (clientId: string, body: {
     title?: string; description?: string; instructions?: string;
     taskType?: TaskType | string;
+    selectedSubtasks?: string[];
     priority?: TaskPriority;
     adminStatus?: AdminStatus | string;
     config?: Record<string, unknown>; metadata?: object;
@@ -539,6 +542,24 @@ export const onboardingAdminApi = {
   get: (clientId: string) =>
     request<{ success: boolean; data: { clientId: string; schema: OnboardingSchema; submission: OnboardingSubmission } }>(
       `/api/admin/clients/${clientId}/onboarding`
+    ),
+};
+
+export type ClientTakeOnSubmission = {
+  answers: Record<string, unknown>;
+  status: string; // not_started | draft | submitted
+  submittedAt: string | null;
+  updatedAt: string | null;
+};
+export const clientTakeOnAdminApi = {
+  get: (clientId: string) =>
+    request<{ success: boolean; data: { clientId: string; schema: OnboardingSchema; submission: ClientTakeOnSubmission } }>(
+      `/api/admin/clients/${clientId}/client-take-on`
+    ),
+  save: (clientId: string, body: { answers: Record<string, unknown>; submit: boolean }) =>
+    request<{ success: boolean; data: ClientTakeOnSubmission }>(
+      `/api/admin/clients/${clientId}/client-take-on`,
+      { method: "PUT", body: JSON.stringify(body) }
     ),
 };
 

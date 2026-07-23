@@ -12,6 +12,8 @@ const TASK_TYPES = {
   T4A:                  "T4A",
   T5018:                "T5018",
   T5:                   "T5",
+  CORPORATE_TAX_QUARTERLY_PAYMENT: "CORPORATE_TAX_QUARTERLY_PAYMENT",
+  HST_QUARTERLY_PAYMENT:           "HST_QUARTERLY_PAYMENT",
   CUSTOM:               "CUSTOM",  // Admin-defined custom business task
 };
 
@@ -66,7 +68,7 @@ const WORKFLOWS = {
   // 2. HST
   // ──────────────────────────────────────────────────────────────────────────
   [TASK_TYPES.HST]: {
-    displayName: "HST Return",
+    displayName: "Sales tax HST",
     subtasks: [
       "Request Tax return information",
       "On hold/Close the task",
@@ -83,6 +85,7 @@ const WORKFLOWS = {
       "HST Approved by client",
       "Filing on hold due to overdue payment",
       "HST Filed",
+      "Email client for quarterly tax payment",
     ],
     clientProgressMap: {
       "Request Tax return information":         "Data pending",
@@ -100,6 +103,7 @@ const WORKFLOWS = {
       "HST Approved by client":                 "Approved filing pending",
       "Filing on hold due to overdue payment":  "Payment overdue",
       "HST Filed":                              "Filed",
+      "Email client for quarterly tax payment": "Payment reminder sent",
     },
     configFields: ["salesTaxFrequency", "salesTaxYearEnd", "hstQuarterOption", "craInstallmentInHST", "taxYearEnd", "taxAmount"],
   },
@@ -279,6 +283,34 @@ const WORKFLOWS = {
       "Send Draft T5 slips to client for approval": "View Draft",
       "Approval received":                          "Approved",
       "Filed":                                      "Filed",
+    },
+    configFields: [],
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // 11. CORPORATE TAX QUARTERLY PAYMENT
+  // ──────────────────────────────────────────────────────────────────────────
+  [TASK_TYPES.CORPORATE_TAX_QUARTERLY_PAYMENT]: {
+    displayName: "Corporate tax quarterly payment",
+    subtasks: [
+      "Email client for quarterly tax payment",
+    ],
+    clientProgressMap: {
+      "Email client for quarterly tax payment": "Payment reminder sent",
+    },
+    configFields: [],
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // 12. HST QUARTERLY PAYMENT
+  // ──────────────────────────────────────────────────────────────────────────
+  [TASK_TYPES.HST_QUARTERLY_PAYMENT]: {
+    displayName: "HST quarterly payment",
+    subtasks: [
+      "Email client for quarterly tax payment",
+    ],
+    clientProgressMap: {
+      "Email client for quarterly tax payment": "Payment reminder sent",
     },
     configFields: [],
   },

@@ -9,8 +9,11 @@ const CONFIG_FIELD_CATALOG = {
   taxAmount:           { key: "taxAmount",           label: "Tax amount",                 type: "number", dependsOn: { field: "craInstallmentInT2", value: true } },
 
   // HST
-  salesTaxFrequency:   { key: "salesTaxFrequency",   label: "Sales tax frequency",        type: "select", required: true, options: ["Monthly", "Quarterly", "Annual"] },
-  salesTaxYearEnd:     { key: "salesTaxYearEnd",     label: "Sales tax year end",         type: "date" },
+  salesTaxFrequency:   { key: "salesTaxFrequency",   label: "Sales tax frequency",        type: "select", required: true, options: ["Annual", "Quarterly", "Monthly"] },
+  salesTaxYearEnd:     {
+    key: "salesTaxYearEnd", label: "Sales tax year end", type: "date",
+    dependsOn: { field: "salesTaxFrequency", value: "Annual" },
+  },
   hstQuarterOption:    {
     key: "hstQuarterOption", label: "Quarter option", type: "select",
     dependsOn: { field: "salesTaxFrequency", value: "Quarterly" },

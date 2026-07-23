@@ -10,6 +10,7 @@ const ADMIN_STATUSES = [
 const TASK_TYPES = [
   "CORPORATE_TAX_RETURN", "HST", "BOOKKEEPING", "PAYROLL", "PD7A",
   "WCB", "T4", "T4A", "T5018", "T5",
+  "CORPORATE_TAX_QUARTERLY_PAYMENT", "HST_QUARTERLY_PAYMENT",
 ];
 
 const bearerAuth = [{ bearerAuth: [] }];

@@ -11,7 +11,7 @@ import { useState } from "react";
 export const Route = createFileRoute("/clients/$clientId")({ component: ClientLayout });
 
 const tabs = [
-  ["home", "Home"], ["onboarding", "On-Boarding"], ["general-docs", "General Docs"], ["tasks", "Tasks"],
+  ["home", "Home"], ["client-take-on", "Client Take-On"], ["onboarding", "On-Boarding"], ["general-docs", "General Docs"], ["tasks", "Tasks"],
   ["communication", "Communication"], ["notes", "Notes"], ["files", "Files"],
   ["resolution-cases", "Resolution Cases"], ["organizers", "Organizers"],
   ["transcripts", "Transcripts"], ["billing", "Billing"], ["time-entries", "Time Entries"],

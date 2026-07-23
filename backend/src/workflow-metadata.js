@@ -27,7 +27,7 @@ const WORKFLOW_METADATA = {
     },
     relatedTasks: [
       {
-        taskKey:    "CORPORATE_TAX_QUARTERLY_PAYMENT",
+        taskKey:    TASK_TYPES.CORPORATE_TAX_QUARTERLY_PAYMENT,
         displayName: "Corporate tax quarterly payment",
         subtask:    "Email client for quarterly payment",
         condition:  "Only when CRA Installment in T2 is Yes and tax year end is filled",
@@ -74,7 +74,7 @@ const WORKFLOW_METADATA = {
     },
     relatedTasks: [
       {
-        taskKey:    "HST_QUARTERLY_PAYMENT",
+        taskKey:    TASK_TYPES.HST_QUARTERLY_PAYMENT,
         displayName: "HST quarterly payment",
         subtask:    "Email client for quarterly tax payment",
         condition:  "Only when CRA Installment in HST is Yes and tax year end is filled",
@@ -202,6 +202,24 @@ const WORKFLOW_METADATA = {
       trigger: "T5 service selected for client",
       frequency: "December 1 every year",
       dueDateRule: "February 28 of the following year",
+    },
+    relatedTasks: [],
+  },
+
+  [TASK_TYPES.CORPORATE_TAX_QUARTERLY_PAYMENT]: {
+    generation: {
+      trigger: "CRA Installment in T2 is Yes and tax year end is filled",
+      frequency: "Quarterly based on tax year end",
+      openDateRule: "1 month before quarterly task date",
+    },
+    relatedTasks: [],
+  },
+
+  [TASK_TYPES.HST_QUARTERLY_PAYMENT]: {
+    generation: {
+      trigger: "CRA Installment in HST is Yes and tax year end is filled",
+      frequency: "Quarterly based on tax year end",
+      openDateRule: "1 month before quarterly task date",
     },
     relatedTasks: [],
   },

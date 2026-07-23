@@ -4,21 +4,26 @@ const { getWorkflow, getClientProgress, isValidSubtask, isTerminalSubtask } = re
 
 // ── Create subtask rows for a new task ────────────────────────────────────────
 // Called when a task is created with a known task_type.
-async function initializeSubtasks(taskId, taskType) {
+async function initializeSubtasks(taskId, taskType, selectedSubtasks = null) {
   const wf = getWorkflow(taskType);
   if (!wf) return;
 
-  for (let i = 0; i < wf.subtasks.length; i++) {
+  const chosen = Array.isArray(selectedSubtasks) && selectedSubtasks.length
+    ? wf.subtasks.filter((name) => selectedSubtasks.includes(name))
+    : wf.subtasks;
+  if (!chosen.length) return;
+
+  for (let i = 0; i < chosen.length; i++) {
     const status = i === 0 ? "active" : "pending";
     await db.query(
       `INSERT INTO task_subtasks (task_id, subtask_name, subtask_order, status)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (task_id, subtask_order) DO NOTHING`,
-      [taskId, wf.subtasks[i], i, status]
+      [taskId, chosen[i], i, status]
     );
   }
 
-  const firstSubtask    = wf.subtasks[0];
+  const firstSubtask    = chosen[0];
   const clientProgress  = getClientProgress(taskType, firstSubtask);
 
   await db.query(

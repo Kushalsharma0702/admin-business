@@ -155,6 +155,24 @@ router.post("/clients", async (req, res) => {
   const { rows: ex } = await db.query("SELECT id FROM users WHERE email=$1", [b.email]);
   if (ex.length > 0) return res.status(409).json(fail("Email already in use"));
 
+  // Cross-DB guard: block if this email is already registered for personal tax filing
+  if (db.mainQuery) {
+    try {
+      const { rows: personalEx } = await db.mainQuery(
+        "SELECT id, customer_type FROM users WHERE LOWER(email) = LOWER($1)",
+        [b.email]
+      );
+      const personalUser = personalEx[0];
+      if (personalUser && personalUser.customer_type !== "BusinessTax") {
+        return res.status(409).json(fail(
+          "This email is already registered as a Personal Tax user."
+        ));
+      }
+    } catch (err) {
+      console.error("Cross-DB personal-tax check failed (non-blocking):", err.message);
+    }
+  }
+
   // Create user with a random temp password (they'll set it via invite)
   const tempHash = await hashPassword(require("crypto").randomBytes(24).toString("hex"));
   const now = new Date().toISOString().split("T")[0];
@@ -319,6 +337,15 @@ router.post("/clients/:clientId/tasks", async (req, res) => {
 
   // Workflow types get subtasks; legacy types (onboarding_form, info, etc.) are allowed too
   const wf = getWorkflow(taskType);
+  const selectedSubtasks = Array.isArray(b.selectedSubtasks)
+    ? [...new Set(b.selectedSubtasks.map((s) => String(s).trim()).filter(Boolean))]
+    : [];
+  if (wf && selectedSubtasks.length) {
+    const invalid = selectedSubtasks.filter((s) => !wf.subtasks.includes(s));
+    if (invalid.length) {
+      return res.status(400).json(fail(`Invalid selectedSubtasks for ${taskType}: ${invalid.join(", ")}`));
+    }
+  }
 
   const title = b.title || (wf ? wf.displayName : null);
   if (!title) return res.status(400).json(fail("title is required (or provide a valid workflow taskType)"));
@@ -375,7 +402,7 @@ router.post("/clients/:clientId/tasks", async (req, res) => {
 
   // If this is a workflow task type, create subtask rows and set initial state
   if (wf) {
-    await initializeSubtasks(task.id, taskType);
+    await initializeSubtasks(task.id, taskType, selectedSubtasks.length ? selectedSubtasks : null);
     const { rows: [refreshed] } = await db.query("SELECT * FROM tasks WHERE id=$1", [task.id]);
     return res.status(201).json(ok({
       ...formatTask(refreshed),

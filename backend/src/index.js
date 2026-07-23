@@ -54,6 +54,9 @@ const { adminRouter: adminOnboarding, clientRouter: clientOnboarding } = require
 app.use("/api/admin",              adminOnboarding);
 app.use("/v3/api/v1/onboarding",   clientOnboarding);
 
+const { adminRouter: adminClientTakeOn } = require("./routes/client-take-on");
+app.use("/api/admin",                 adminClientTakeOn);
+
 // Client auth — customer-type lookup for Flutter post-login
 app.use("/v3/api/v1/auth",     require("./routes/client-auth"));
 
