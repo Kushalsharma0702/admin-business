@@ -3,10 +3,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app/AppShell";
 import { clientsApi } from "@/lib/api";
 import { ClientAvatar } from "@/components/app/ClientAvatar";
-import { Star, Copy, Pencil, Loader2, Trash2 } from "lucide-react";
+import { Pencil, Loader2, Trash2 } from "lucide-react";
 import { fmtDate } from "@/components/app/utils";
 import { toast } from "sonner";
 import { useState } from "react";
+import { CopyableField } from "@/components/ui/copyable-field";
 
 export const Route = createFileRoute("/clients/$clientId")({ component: ClientLayout });
 
@@ -97,27 +98,17 @@ function ClientLayout() {
           <div className="bg-card rounded-lg border border-border p-4">
             <div className="flex items-center justify-between mb-2"><h3 className="font-semibold text-sm">Client Info</h3><Pencil className="w-3.5 h-3.5 text-muted-foreground" /></div>
             <div className="space-y-2.5 text-xs">
-              <Field label="Full name" value={client.name} />
-              <div>
-                <div className="text-muted-foreground uppercase text-[10px] font-semibold mb-0.5">Email</div>
-                <div className="flex items-center gap-1">
-                  <Star className="w-3 h-3 text-amber-500" />
-                  <a className="text-primary truncate flex-1" href={`mailto:${client.email}`}>{client.email || "—"}</a>
-                  <Copy className="w-3 h-3 text-muted-foreground cursor-pointer" onClick={() => { navigator.clipboard.writeText(client.email); toast.success("Copied"); }} />
-                </div>
-              </div>
-              <div>
-                <div className="text-muted-foreground uppercase text-[10px] font-semibold mb-0.5">Mobile</div>
-                <div className="flex items-center gap-1"><Star className="w-3 h-3 text-amber-500" /><span>{client.phone || "—"}</span></div>
-              </div>
+              <CopyableField label="Full name" value={client.name} inline />
+              <CopyableField label="Email" value={client.email} inline />
+              <CopyableField label="Mobile" value={client.phone} inline />
             </div>
           </div>
           <div className="bg-card rounded-lg border border-border p-4">
             <div className="flex items-center justify-between mb-2"><h3 className="font-semibold text-sm">About</h3><Pencil className="w-3.5 h-3.5 text-muted-foreground" /></div>
             <div className="space-y-2.5 text-xs">
-              <Field label="Occupation" value={client.occupation ?? ""} />
-              <Field label="Client since" value={fmtDate(client.clientSince ?? "")} />
-              <Field label="Created on" value={fmtDate(client.createdAt)} />
+              <CopyableField label="Occupation" value={client.occupation ?? ""} inline />
+              <CopyableField label="Client since" value={fmtDate(client.clientSince ?? "")} inline />
+              <CopyableField label="Created on" value={fmtDate(client.createdAt)} inline />
             </div>
           </div>
           <button
@@ -157,14 +148,5 @@ function ClientLayout() {
         <div><Outlet /></div>
       </div>
     </AppShell>
-  );
-}
-
-function Field({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-muted-foreground uppercase text-[10px] font-semibold mb-0.5">{label}</div>
-      <div className="text-foreground">{value || "—"}</div>
-    </div>
   );
 }

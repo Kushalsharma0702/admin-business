@@ -20,6 +20,20 @@ dist-ssr
 .wrangler/
 .dev.vars
 
+# Secrets
+.env
+.env.production
+.env.local
+backend/.env
+backend/.env.production
+backend/.env.local
+
+# Build output / local runtime data
+.vercel/output
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -10,12 +10,33 @@ import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/app/EmptyState";
 import { StatusBadge } from "@/components/app/StatusBadge";
 import { fmtDate, fmtMoney } from "@/components/app/utils";
-import { Upload, FileText, StickyNote, Scale, FileQuestion, FilePlus, Receipt, Clock, Send, Plus, Loader2, WifiOff } from "lucide-react";
+import { Upload, FileText, StickyNote, Scale, FileQuestion, FilePlus, Receipt, Clock, Send, Plus, Loader2, WifiOff, Copy, Check } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 
 export const Route = createFileRoute("/clients/$clientId/$tab")({ component: ClientTab });
+
+function CopyableValue({ value, className }: { value: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+  if (!value || value === "—") return <span className="text-muted-foreground">—</span>;
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      toast.success(`Copied: ${value}`);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { toast.error("Could not copy"); }
+  };
+  return (
+    <span className={`group/cv inline-flex items-center gap-1 ${className ?? ""}`}>
+      <span>{value}</span>
+      <button type="button" onClick={handleCopy} className="opacity-0 group-hover/cv:opacity-100 transition-opacity shrink-0" title="Copy">
+        {copied ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3 text-muted-foreground hover:text-foreground" />}
+      </button>
+    </span>
+  );
+}
 
 function ClientTab() {
   const { clientId, tab } = useParams({ from: "/clients/$clientId/$tab" });
@@ -684,12 +705,9 @@ function OnboardingTab({ clientId }: { clientId: string }) {
     const v = answers[f.key];
     if (f.type === "ack") {
       const m = (v ?? {}) as { confirmed?: boolean; remark?: string };
-      return (
-        <span>
-          <span className={m.confirmed ? "text-emerald-600 font-medium" : "text-muted-foreground"}>{m.confirmed ? "Confirmed" : "Not confirmed"}</span>
-          {m.remark ? <span className="text-muted-foreground"> — {m.remark}</span> : null}
-        </span>
-      );
+      const ackText = m.confirmed ? "Confirmed" : "Not confirmed";
+      const fullText = m.remark ? `${ackText} — ${m.remark}` : ackText;
+      return <CopyableValue value={fullText} />;
     }
     if (f.type === "group") {
       const items = Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
@@ -701,7 +719,7 @@ function OnboardingTab({ clientId }: { clientId: string }) {
               <div className="text-[10px] uppercase font-semibold text-muted-foreground mb-1">{f.itemLabel ?? "Item"} {i + 1}</div>
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                 {(f.fields ?? []).map((sub2) => (
-                  <div key={sub2.key}><span className="text-muted-foreground">{sub2.label}: </span>{String(item[sub2.key] ?? "") || "—"}</div>
+                  <div key={sub2.key}><span className="text-muted-foreground">{sub2.label}: </span><CopyableValue value={String(item[sub2.key] ?? "")} /></div>
                 ))}
               </div>
             </div>
@@ -710,7 +728,7 @@ function OnboardingTab({ clientId }: { clientId: string }) {
       );
     }
     const s = v === undefined || v === null ? "" : String(v);
-    return <span>{s || <span className="text-muted-foreground">—</span>}</span>;
+    return <CopyableValue value={s} />;
   };
 
   return (
@@ -827,14 +845,15 @@ function ClientTakeOnTab({ clientId }: { clientId: string }) {
             <div key={i} className="rounded-md border border-border p-2 bg-muted/30 text-sm">
               <div className="text-[10px] uppercase text-muted-foreground mb-1">{f.itemLabel ?? "Item"} {i + 1}</div>
               {(f.fields ?? []).map((sf) => (
-                <div key={sf.key}><span className="text-muted-foreground">{sf.label}: </span>{String(item[sf.key] ?? "—")}</div>
+                <div key={sf.key}><span className="text-muted-foreground">{sf.label}: </span><CopyableValue value={String(item[sf.key] ?? "")} /></div>
               ))}
             </div>
           ))}
         </div>
       );
     }
-    return <span className="text-sm">{v === undefined || v === null || String(v).trim() === "" ? <span className="text-muted-foreground">—</span> : String(v)}</span>;
+    const s = v === undefined || v === null || String(v).trim() === "" ? "" : String(v);
+    return <span className="text-sm"><CopyableValue value={s} /></span>;
   };
 
   const renderEditor = (f: OnboardingField) => {
