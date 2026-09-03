@@ -148,7 +148,9 @@ router.post("/accept-invite", async (req, res) => {
 
   return res.json(ok({
     email: row.email,
-    appDeepLink: "diamondaccounts://login",
+    // Three slashes: the app's router reads the URI *path*, so the first
+    // segment must not land in the authority (see invite.$token.tsx).
+    appDeepLink: "diamondaccounts:///login",
   }, "Password set successfully! You can now log in to the Diamond Accounts app."));
 });
 

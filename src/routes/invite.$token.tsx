@@ -16,8 +16,14 @@ type InviteState = "loading" | "valid" | "used" | "expired" | "invalid" | "succe
 const PACKAGE_NAME = "com.aurocode.tax_ease";
 const APP_STORE_URL = `https://play.google.com/store/apps/details?id=${PACKAGE_NAME}`;
 // Opens the app directly at the Login page — Flutter then resolves customer_type from the
-// business backend after login and routes to the correct dashboard (T2 vs T1).
-const INTENT_URL = `intent://login#Intent;scheme=diamondaccounts;package=${PACKAGE_NAME};S.browser_fallback_url=${encodeURIComponent(APP_STORE_URL)};end`;
+// login response and routes to the correct dashboard (T2 vs T1).
+//
+// NOTE the THREE slashes. `intent://login#Intent;...` builds the URI
+// `diamondaccounts://login`, where "login" is the URI *authority* and the path
+// is empty — go_router matches no route and shows "Page Not Found". The
+// triple-slash form builds `diamondaccounts:///login` (empty authority, path
+// "/login"), which matches the app's /login route.
+const INTENT_URL = `intent:///login#Intent;scheme=diamondaccounts;package=${PACKAGE_NAME};S.browser_fallback_url=${encodeURIComponent(APP_STORE_URL)};end`;
 
 function SuccessCard({ clientEmail, clientName }: { clientEmail: string; clientName: string }) {
   // Android Chrome BLOCKS window.location.href deep links from JS (security policy).

@@ -9,7 +9,6 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { useState } from "react";
 import { clientsApi, inviteApi, generalDocsAdminApi, type ApiClient, type GeneralDocField } from "@/lib/api";
 import { GeneralDocsConfig } from "@/components/app/GeneralDocsConfig";
@@ -203,8 +202,8 @@ function ClientsList() {
 
       {/* ── Invite Client Dialog ─────────────────────────────────────────────── */}
       <Dialog open={showInvite} onOpenChange={(v) => { setShowInvite(v); if (!v) { setForm(EMPTY_FORM); setGenDocs(EMPTY_GEN_DOCS); } }}>
-        <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col">
-          <DialogHeader>
+        <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col overflow-hidden">
+          <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2">
               <Mail className="h-5 w-5 text-primary" />
               Invite New Client
@@ -214,7 +213,12 @@ function ClientsList() {
             </DialogDescription>
           </DialogHeader>
 
-          <ScrollArea className="flex-1 pr-1">
+          {/* Native scrolling, not Radix ScrollArea: `min-h-0` is what lets this
+              flex child shrink below its content height. Without it the block
+              grows past the dialog's max-h, pushing the footer off-screen and
+              leaving the overflowing fields unreachable by mouse wheel — which
+              is why the form only broke once more than ~4 doc fields were added. */}
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1">
             <div className="space-y-5 py-1 pr-2">
               {/* Client details */}
               <div className="space-y-3">
@@ -261,9 +265,9 @@ function ClientsList() {
                 <div className="flex items-start gap-2"><span className="text-primary font-bold mt-0.5">3.</span> Client clicks the link, sets their password, and logs in{genDocs.enabled ? ", then sees their document checklist" : ""}.</div>
               </div>
             </div>
-          </ScrollArea>
+          </div>
 
-          <DialogFooter className="pt-2">
+          <DialogFooter className="shrink-0 pt-2 border-t">
             <Button variant="outline" onClick={() => setShowInvite(false)}>Cancel</Button>
             <Button onClick={() => inviteMutation.mutate()}
               disabled={!form.name.trim() || !form.email.trim() || inviteMutation.isPending}>

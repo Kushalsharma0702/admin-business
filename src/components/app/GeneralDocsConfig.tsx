@@ -34,13 +34,10 @@ interface Props {
   compact?: boolean;
 }
 
-type FieldDraft = Partial<GeneralDocField> & { _id: string };
-
-function uid() { return Math.random().toString(36).slice(2); }
+type FieldDraft = Partial<GeneralDocField>;
 
 function toFieldDraft(f: Partial<GeneralDocField>, idx: number): FieldDraft {
   return {
-    _id:          f.key ? `${f.key}_${idx}` : uid(),
     key:          f.key || "",
     name:         f.name || "",
     placeholder:  f.placeholder || "",
@@ -53,14 +50,18 @@ function toFieldDraft(f: Partial<GeneralDocField>, idx: number): FieldDraft {
 }
 
 export function GeneralDocsConfig({ value, onChange, compact }: Props) {
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  // Keyed by position in the field list. Fields live entirely in the parent's
+  // state and are rebuilt on every render, so position is the only identity
+  // that survives a render — a generated id would be regenerated each time,
+  // collapsing the editor the instant a keystroke re-rendered the component.
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
 
   const fields: FieldDraft[] = (value.fields || []).map(toFieldDraft);
 
   function update(updatedFields: FieldDraft[]) {
     onChange({
       enabled: value.enabled,
-      fields: updatedFields.map(({ _id, ...rest }, i) => ({ ...rest, displayOrder: i + 1 })),
+      fields: updatedFields.map((f, i) => ({ ...f, displayOrder: i + 1 })),
     });
   }
 
@@ -70,34 +71,44 @@ export function GeneralDocsConfig({ value, onChange, compact }: Props) {
 
   function addBlank() {
     const draft: FieldDraft = {
-      _id: uid(), key: "", name: "", placeholder: "",
+      key: "", name: "", placeholder: "",
       required: false, maxCount: 1, acceptedTypes: ["pdf","jpg","jpeg","png"],
       notes: "", displayOrder: fields.length + 1,
     };
-    const next = [...fields, draft];
-    setExpanded((e) => ({ ...e, [draft._id]: true }));
-    update(next);
+    // Open the new row (last position) so the name input is reachable.
+    setExpanded((e) => ({ ...e, [fields.length]: true }));
+    update([...fields, draft]);
   }
 
   function addSuggested(s: typeof SUGGESTED_FIELDS[number]) {
     const exists = fields.some((f) => f.key === s.key);
     if (exists) return;
-    const draft: FieldDraft = { _id: uid(), ...s, displayOrder: fields.length + 1 };
-    const next = [...fields, draft];
-    setExpanded((ex) => ({ ...ex, [draft._id]: false }));
-    update(next);
+    const draft: FieldDraft = { ...s, displayOrder: fields.length + 1 };
+    setExpanded((ex) => ({ ...ex, [fields.length]: false }));
+    update([...fields, draft]);
   }
 
-  function removeField(id: string) {
-    update(fields.filter((f) => f._id !== id));
+  function removeField(idx: number) {
+    // Shift the expanded flags of every row after the removed one down by one,
+    // otherwise the wrong row appears open after a delete.
+    setExpanded((e) => {
+      const next: Record<number, boolean> = {};
+      for (const k of Object.keys(e)) {
+        const i = Number(k);
+        if (i < idx) next[i] = e[i];
+        else if (i > idx) next[i - 1] = e[i];
+      }
+      return next;
+    });
+    update(fields.filter((_, i) => i !== idx));
   }
 
-  function patchField(id: string, patch: Partial<FieldDraft>) {
-    update(fields.map((f) => f._id === id ? { ...f, ...patch } : f));
+  function patchField(idx: number, patch: Partial<FieldDraft>) {
+    update(fields.map((f, i) => i === idx ? { ...f, ...patch } : f));
   }
 
-  function toggleExpand(id: string) {
-    setExpanded((e) => ({ ...e, [id]: !e[id] }));
+  function toggleExpand(idx: number) {
+    setExpanded((e) => ({ ...e, [idx]: !e[idx] }));
   }
 
   const alreadyAdded = new Set(fields.map((f) => f.key).filter(Boolean));
@@ -141,7 +152,7 @@ export function GeneralDocsConfig({ value, onChange, compact }: Props) {
           {/* Field list */}
           <div className="space-y-2">
             {fields.map((f, idx) => (
-              <Card key={f._id} className="p-3">
+              <Card key={idx} className="p-3">
                 <div className="flex items-center gap-2">
                   <GripVertical className="h-4 w-4 text-muted-foreground shrink-0" />
                   <div className="flex-1 min-w-0">
@@ -159,19 +170,19 @@ export function GeneralDocsConfig({ value, onChange, compact }: Props) {
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     <Button size="icon" variant="ghost" className="h-7 w-7"
-                      onClick={() => toggleExpand(f._id)}>
-                      {expanded[f._id]
+                      onClick={() => toggleExpand(idx)}>
+                      {expanded[idx]
                         ? <ChevronUp className="h-4 w-4" />
                         : <ChevronDown className="h-4 w-4" />}
                     </Button>
                     <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:text-destructive"
-                      onClick={() => removeField(f._id)}>
+                      onClick={() => removeField(idx)}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
                 </div>
 
-                {expanded[f._id] && (
+                {expanded[idx] && (
                   <div className="mt-3 grid gap-3 border-t pt-3">
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1">
@@ -181,7 +192,7 @@ export function GeneralDocsConfig({ value, onChange, compact }: Props) {
                           onChange={(e) => {
                             const name = e.target.value;
                             const key = name.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
-                            patchField(f._id, { name, key: f.key || key });
+                            patchField(idx, { name, key: f.key || key });
                           }}
                           placeholder="e.g. Bank Statements"
                           className="h-8 text-sm"
@@ -191,7 +202,7 @@ export function GeneralDocsConfig({ value, onChange, compact }: Props) {
                         <Label className="text-xs">Key (auto-generated)</Label>
                         <Input
                           value={f.key || ""}
-                          onChange={(e) => patchField(f._id, { key: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "") })}
+                          onChange={(e) => patchField(idx, { key: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "") })}
                           placeholder="bank_statements"
                           className="h-8 text-sm font-mono"
                         />
@@ -202,7 +213,7 @@ export function GeneralDocsConfig({ value, onChange, compact }: Props) {
                       <Label className="text-xs">Placeholder</Label>
                       <Input
                         value={f.placeholder || ""}
-                        onChange={(e) => patchField(f._id, { placeholder: e.target.value })}
+                        onChange={(e) => patchField(idx, { placeholder: e.target.value })}
                         placeholder="Instructions shown to client"
                         className="h-8 text-sm"
                       />
@@ -215,17 +226,17 @@ export function GeneralDocsConfig({ value, onChange, compact }: Props) {
                           type="number"
                           min={1} max={50}
                           value={f.maxCount ?? 1}
-                          onChange={(e) => patchField(f._id, { maxCount: Math.max(1, Math.min(50, Number(e.target.value))) })}
+                          onChange={(e) => patchField(idx, { maxCount: Math.max(1, Math.min(50, Number(e.target.value))) })}
                           className="h-8 text-sm"
                         />
                       </div>
                       <div className="flex items-center gap-2 pt-5">
                         <Switch
                           checked={f.required ?? false}
-                          onCheckedChange={(v) => patchField(f._id, { required: v })}
-                          id={`req-${f._id}`}
+                          onCheckedChange={(v) => patchField(idx, { required: v })}
+                          id={`req-${idx}`}
                         />
-                        <Label htmlFor={`req-${f._id}`} className="text-xs">Required</Label>
+                        <Label htmlFor={`req-${idx}`} className="text-xs">Required</Label>
                       </div>
                     </div>
 
@@ -240,7 +251,7 @@ export function GeneralDocsConfig({ value, onChange, compact }: Props) {
                               type="button"
                               onClick={() => {
                                 const cur = f.acceptedTypes ?? [];
-                                patchField(f._id, {
+                                patchField(idx, {
                                   acceptedTypes: selected
                                     ? cur.filter((x) => x !== t)
                                     : [...cur, t],
@@ -263,7 +274,7 @@ export function GeneralDocsConfig({ value, onChange, compact }: Props) {
                       <Label className="text-xs">Notes (shown to client)</Label>
                       <Textarea
                         value={f.notes || ""}
-                        onChange={(e) => patchField(f._id, { notes: e.target.value })}
+                        onChange={(e) => patchField(idx, { notes: e.target.value })}
                         placeholder="Additional instructions or context"
                         rows={2}
                         className="text-sm resize-none"
