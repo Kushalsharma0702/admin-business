@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
-import { Loader2, CheckCircle2, AlertCircle, KeyRound, Smartphone } from "lucide-react";
+import { Loader2, CheckCircle2, AlertCircle, KeyRound, Smartphone, Globe } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 
 export const Route = createFileRoute("/invite/$token")({ component: InvitePage });
@@ -24,6 +24,12 @@ const APP_STORE_URL = `https://play.google.com/store/apps/details?id=${PACKAGE_N
 // triple-slash form builds `diamondaccounts:///login` (empty authority, path
 // "/login"), which matches the app's /login route.
 const INTENT_URL = `intent:///login#Intent;scheme=diamondaccounts;package=${PACKAGE_NAME};S.browser_fallback_url=${encodeURIComponent(APP_STORE_URL)};end`;
+
+// Client web portal — the same Flutter client app built for web. Clients who
+// are on desktop, on iOS, or simply don't want to install the app can finish
+// everything here. Flutter Web uses the default hash URL strategy, so in-app
+// routes live after the '#'.
+const WEB_PORTAL_URL = "https://tax.diamondaccounts.ca/#/login";
 
 function SuccessCard({ clientEmail, clientName }: { clientEmail: string; clientName: string }) {
   // Android Chrome BLOCKS window.location.href deep links from JS (security policy).
@@ -58,16 +64,27 @@ function SuccessCard({ clientEmail, clientName }: { clientEmail: string; clientN
 
       {/* Primary CTA — MUST be a user tap, not auto-redirect */}
       <div className="space-y-3">
-        <p className="text-slate-300 text-sm font-medium">Tap the button below to open the app:</p>
+        <p className="text-slate-300 text-sm font-medium">Continue to your account:</p>
         <button
           onClick={handleOpenApp}
-          className="flex items-center justify-center gap-2.5 w-full px-4 py-4 bg-primary text-primary-foreground rounded-xl font-bold text-base hover:bg-primary/90 active:scale-95 transition-all shadow-lg shadow-primary/30 animate-pulse"
+          className="flex items-center justify-center gap-2.5 w-full px-4 py-4 bg-primary text-primary-foreground rounded-xl font-bold text-base hover:bg-primary/90 active:scale-95 transition-all shadow-lg shadow-primary/30"
         >
           <Smartphone className="h-5 w-5" />
           Open Diamond Accounts App
         </button>
+
+        {/* Browser route — works on desktop and iOS, and for anyone who does
+            not want to install the app. Same client app, built for web. */}
+        <a
+          href={WEB_PORTAL_URL}
+          className="flex items-center justify-center gap-2.5 w-full px-4 py-3.5 bg-slate-700/60 text-white border border-slate-600 rounded-xl font-semibold text-sm hover:bg-slate-700 active:scale-95 transition-all"
+        >
+          <Globe className="h-4 w-4" />
+          Continue in this browser instead
+        </a>
+
         <p className="text-slate-500 text-xs">
-          The app will open at the login screen.{" "}
+          Both open at the login screen.{" "}
           <a href={APP_STORE_URL} className="text-primary underline">
             Don't have the app? Download it here.
           </a>
@@ -76,11 +93,11 @@ function SuccessCard({ clientEmail, clientName }: { clientEmail: string; clientN
 
       {/* Instructions */}
       <div className="bg-slate-900/40 rounded-lg p-3 text-left border border-slate-700/50">
-        <p className="text-xs text-slate-400 font-semibold mb-2 uppercase tracking-wide">Once in the app</p>
+        <p className="text-xs text-slate-400 font-semibold mb-2 uppercase tracking-wide">What happens next</p>
         <ol className="space-y-1.5 text-xs text-slate-300">
           <li className="flex gap-2"><span className="text-primary font-bold">1.</span>Log in with your email and password</li>
-          <li className="flex gap-2"><span className="text-primary font-bold">2.</span>The app automatically opens your Business Tax (T2) dashboard</li>
-          <li className="flex gap-2"><span className="text-primary font-bold">3.</span>Fill in your business details and complete assigned tasks</li>
+          <li className="flex gap-2"><span className="text-primary font-bold">2.</span>You go straight to your Business Tax (T2) on-boarding form</li>
+          <li className="flex gap-2"><span className="text-primary font-bold">3.</span>Complete on-boarding, then upload your requested documents</li>
         </ol>
       </div>
     </Card>
@@ -166,17 +183,23 @@ function InvitePage() {
             <div className="space-y-2">
               <CheckCircle2 className="h-14 w-14 mx-auto text-emerald-400" />
               <h2 className="text-xl font-bold text-white">Account already activated</h2>
-              <p className="text-slate-400 text-sm">Your account is set up. Open the Diamond Accounts app and log in with your email and password.</p>
+              <p className="text-slate-400 text-sm">Your account is set up. Log in with your email and password — in the app or in your browser.</p>
             </div>
             <div className="space-y-3">
-              <p className="text-slate-300 text-sm font-medium">Tap below to open the app:</p>
               <button
                 onClick={() => { window.location.href = INTENT_URL; }}
-                className="flex items-center justify-center gap-2.5 w-full px-4 py-4 bg-primary text-primary-foreground rounded-xl font-bold text-base hover:bg-primary/90 active:scale-95 transition-all shadow-lg shadow-primary/30 animate-pulse"
+                className="flex items-center justify-center gap-2.5 w-full px-4 py-4 bg-primary text-primary-foreground rounded-xl font-bold text-base hover:bg-primary/90 active:scale-95 transition-all shadow-lg shadow-primary/30"
               >
                 <Smartphone className="h-5 w-5" />
                 Open Diamond Accounts App
               </button>
+              <a
+                href={WEB_PORTAL_URL}
+                className="flex items-center justify-center gap-2.5 w-full px-4 py-3.5 bg-slate-700/60 text-white border border-slate-600 rounded-xl font-semibold text-sm hover:bg-slate-700 active:scale-95 transition-all"
+              >
+                <Globe className="h-4 w-4" />
+                Continue in this browser instead
+              </a>
               <p className="text-slate-500 text-xs">
                 <a href={APP_STORE_URL} className="text-primary underline">Don't have the app? Download it here.</a>
               </p>

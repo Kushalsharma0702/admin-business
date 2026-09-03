@@ -22,6 +22,11 @@ const s3 = new S3Client({
 
 // ── SES ───────────────────────────────────────────────────────────────────────
 
+// Client web portal — the client Flutter app built for web, for clients who
+// don't want (or can't use) the mobile app. Hash routing is the Flutter Web
+// default, so in-app routes live after the '#'.
+const WEB_PORTAL_URL = "https://tax.diamondaccounts.ca/#/login";
+
 async function sendInviteEmail({ toEmail, toName, inviteUrl }) {
   const htmlBody = `
     <div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px">
@@ -31,13 +36,20 @@ async function sendInviteEmail({ toEmail, toName, inviteUrl }) {
       <div style="background:#f8fafc;padding:32px 24px;border-radius:0 0 8px 8px;border:1px solid #e2e8f0;border-top:none">
         <h2 style="color:#1e293b;margin-top:0">You've been invited to your client portal</h2>
         <p style="color:#475569">Hi ${toName},</p>
-        <p style="color:#475569">Your accounting team at Diamond Accounts has set up your client portal. Click the button below to set your password and get started.</p>
+        <p style="color:#475569">Your accounting team at Diamond Accounts has set up your client portal. Setting your password is step 1 of 3 — here is the whole process:</p>
+        <ol style="color:#475569;font-size:14px;padding-left:20px;margin:16px 0">
+          <li style="margin-bottom:6px">Set your password using the button below.</li>
+          <li style="margin-bottom:6px">Log in — you'll be taken straight to your <strong>on-boarding form</strong>.</li>
+          <li>Complete on-boarding, then upload the documents we've requested.</li>
+        </ol>
         <p style="margin:32px 0;text-align:center">
           <a href="${inviteUrl}"
              style="background:#4f46e5;color:#fff;padding:14px 28px;border-radius:6px;text-decoration:none;font-weight:600;font-size:15px;display:inline-block">
-            Set Your Password &amp; Get Started
+            Start Step 1 &mdash; Set Your Password
           </a>
         </p>
+        <p style="color:#475569;font-size:13px">After setting your password you can use either the <strong>Diamond Accounts mobile app</strong> or your browser at
+          <a href="${WEB_PORTAL_URL}" style="color:#4f46e5">tax.diamondaccounts.ca</a>. The next screen gives you both options.</p>
         <p style="color:#94a3b8;font-size:13px">This link expires in <strong>7 days</strong>. If you did not expect this email, you can safely ignore it.</p>
         <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0"/>
         <p style="color:#94a3b8;font-size:12px;margin:0">— Diamond Accounts Tax Team<br/>
@@ -51,9 +63,16 @@ async function sendInviteEmail({ toEmail, toName, inviteUrl }) {
     `Hi ${toName},`,
     "",
     "Your accounting team at Diamond Accounts has set up your client portal.",
+    "Setting your password is step 1 of 3:",
     "",
-    "Set your password here:",
+    "  1. Set your password using the link below.",
+    "  2. Log in — you'll be taken straight to your on-boarding form.",
+    "  3. Complete on-boarding, then upload the documents we've requested.",
+    "",
+    "Step 1 — set your password here:",
     inviteUrl,
+    "",
+    `After that, log in from the Diamond Accounts mobile app or your browser at ${WEB_PORTAL_URL}`,
     "",
     "This link expires in 7 days.",
     "",
