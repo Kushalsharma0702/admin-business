@@ -18,10 +18,21 @@ pool.on("error", (err) => {
   console.error("Unexpected PostgreSQL pool error:", err.message);
 });
 
-// Main app DB (taxease_admin) — used by admin-business routes
+// The Flutter/Python app DB (the `postgres` database), separate from this
+// service's own `taxease_admin` DB. Required for accept-invite to mirror the
+// new client into the app's users table — without it a client can set a
+// password successfully and then be told "invalid email or password" by the
+// app, because the app authenticates against a database this service never
+// wrote to. Warn loudly rather than failing silently.
 const mainPool = (() => {
   const mainDbUrl = process.env.MAIN_DATABASE_URL;
-  if (!mainDbUrl) return null;
+  if (!mainDbUrl) {
+    console.warn(
+      "\n  ⚠️  MAIN_DATABASE_URL is not set — invited clients will NOT be synced to the app database.\n" +
+      "      They will be able to set a password but will get 'invalid email or password' in the mobile app.\n"
+    );
+    return null;
+  }
   const p = new Pool({
     connectionString: mainDbUrl,
     ssl: mainDbUrl.includes("rds.amazonaws.com") ? { rejectUnauthorized: false } : false,
