@@ -49,6 +49,7 @@ const mainPool = (() => {
 const db = {
   query: (text, params) => pool.query(text, params),
   pool,
+  mainPool, // exposed so scripts (e.g. smoke-test.js) can close both pools on exit
   mainQuery: mainPool
     ? (text, params) => mainPool.query(text, params)
     : null,
