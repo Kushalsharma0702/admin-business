@@ -153,7 +153,17 @@ async function main() {
     // ── Cleanup — runs even if assertions above failed ────────────────────────
     try {
       if (userId) await db.query("DELETE FROM users WHERE id=$1", [userId]); // cascades invite_tokens
-      if (db.mainQuery) await db.mainQuery("DELETE FROM users WHERE LOWER(email)=LOWER($1)", [TEST_EMAIL]);
+      if (db.mainQuery) {
+        // refresh_tokens.user_id -> users.id has NO CASCADE (confdeltype='a'),
+        // and a successful login always inserts one. Delete it first or the
+        // user DELETE fails with the exact FK error this test exists to catch
+        // elsewhere in the codebase (see auth.js's accept-invite comment).
+        await db.mainQuery(
+          `DELETE FROM refresh_tokens WHERE user_id = (SELECT id FROM users WHERE LOWER(email)=LOWER($1))`,
+          [TEST_EMAIL]
+        );
+        await db.mainQuery("DELETE FROM users WHERE LOWER(email)=LOWER($1)", [TEST_EMAIL]);
+      }
       console.log(`\n  cleanup: removed ${TEST_EMAIL} from both databases`);
     } catch (cleanupErr) {
       console.error(`\n  ⚠️  CLEANUP FAILED — ${TEST_EMAIL} may still exist in one or both DBs: ${cleanupErr.message}`);
