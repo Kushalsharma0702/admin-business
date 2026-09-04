@@ -110,48 +110,85 @@ router.post("/accept-invite", async (req, res) => {
     [row.id]
   );
 
-  // Sync to main Flutter database so the client can login to the mobile app as a business user
-  if (db.mainQuery) {
+  // Mirror the credential into the app database (the one the mobile app and
+  // web portal authenticate against). If this does not land, the client can
+  // set a password here and still be told "invalid email or password" by the
+  // app, so track the outcome rather than discarding it.
+  let appLoginReady = false;
+
+  if (!db.mainQuery) {
+    console.error(
+      `CRITICAL: MAIN_DATABASE_URL not configured — ${row.email} set a password ` +
+      `but CANNOT log in to the app. Configure it and re-run the invite.`
+    );
+  } else {
     try {
       const nameParts = (row.name || "").trim().split(/\s+/);
       const firstName = nameParts[0] || "";
       const lastName = nameParts.slice(1).join(" ") || "";
-      // Remove any stale record with the same email but a different UUID (e.g. re-invited user)
-      // so the Flutter DB UUID always matches the taxease_admin UUID.
-      await db.mainQuery(
-        `DELETE FROM users WHERE email=LOWER($1) AND id != $2`,
-        [row.email, row.user_id]
-      );
-      await db.mainQuery(
+
+      // Upsert on EMAIL, and never delete.
+      //
+      // This previously ran `DELETE FROM users WHERE email=$1 AND id != $2`
+      // first, to force both databases onto the same UUID. 28 foreign keys
+      // reference users.id, so as soon as a client had a filing (or a task, a
+      // profile, an upload…) that DELETE raised
+      //   violates foreign key constraint "filings_user_id_fkey"
+      // which aborted this whole block *before* the password upsert ran and
+      // was then swallowed as "non-blocking". The client kept whatever stale
+      // password the app database already held.
+      //
+      // Syncing the credential is the critical operation; aligning UUIDs is
+      // not, and is not worth destroying a row over. Drift is reported below
+      // and reconciled separately.
+      const { rows: appRows } = await db.mainQuery(
         `INSERT INTO users (id, email, first_name, last_name, phone, password_hash, email_verified, is_active, customer_type, created_at, updated_at)
          VALUES ($1, LOWER($2), $3, $4, $5, $6, TRUE, TRUE, 'BusinessTax', NOW(), NOW())
-         ON CONFLICT (id) DO UPDATE SET
+         ON CONFLICT (email) DO UPDATE SET
            password_hash = EXCLUDED.password_hash,
            customer_type = 'BusinessTax',
            email_verified = TRUE,
            is_active = TRUE,
-           updated_at = NOW()`,
+           updated_at = NOW()
+         RETURNING id`,
         [row.user_id, row.email, firstName, lastName, row.phone || null, hashed]
       );
-      // Also create a client record in the admin clients table
+      appLoginReady = true;
+
+      const appUserId = appRows[0]?.id || row.user_id;
+      if (appUserId !== row.user_id) {
+        console.warn(
+          `UUID drift for ${row.email}: taxease_admin=${row.user_id} app=${appUserId}. ` +
+          `Password synced (login works); business features keyed to the admin UUID need reconciliation.`
+        );
+      }
+
       await db.mainQuery(
         `INSERT INTO clients (id, name, email, phone, filing_year, status, payment_status, total_amount, paid_amount, created_at, updated_at)
          VALUES ($1, $2, LOWER($3), $4, $5, 'documents_pending', 'pending', 0.0, 0.0, NOW(), NOW())
          ON CONFLICT DO NOTHING`,
-        [row.user_id, row.name, row.email, row.phone || null, new Date().getFullYear()]
+        [appUserId, row.name, row.email, row.phone || null, new Date().getFullYear()]
       );
-      console.log(`Synced business client ${row.email} to main Flutter database`);
+      console.log(`Synced business client ${row.email} to the app database`);
     } catch (err) {
-      console.error(`Failed to sync ${row.email} to main DB (non-blocking):`, err.message);
+      console.error(
+        `CRITICAL: app-DB sync FAILED for ${row.email} — they will NOT be able ` +
+        `to log in to the app: ${err.message}`
+      );
     }
   }
 
   return res.json(ok({
     email: row.email,
+    // Tells the caller whether the app login will actually work. False means
+    // the portal password was set but the app database was not updated.
+    appLoginReady,
     // Three slashes: the app's router reads the URI *path*, so the first
     // segment must not land in the authority (see invite.$token.tsx).
     appDeepLink: "diamondaccounts:///login",
-  }, "Password set successfully! You can now log in to the Diamond Accounts app."));
+  }, appLoginReady
+    ? "Password set successfully! You can now log in to the Diamond Accounts app."
+    : "Password set, but your account is still being prepared. Please contact your accountant before logging in."));
 });
 
 // ── POST /api/auth/setup-password (requires JWT — for must_change_password) ──
