@@ -17,15 +17,16 @@ const FILE_TYPE_OPTIONS = ["pdf", "jpg", "jpeg", "png", "xls", "xlsx", "doc", "d
 const SUGGESTED_FIELDS: Omit<GeneralDocField, "displayOrder">[] = [
   { key: "business_bank_statements",        name: "Business Bank Statements",              placeholder: "Upload bank statements",                        required: true,  maxCount: 3, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
   { key: "business_credit_card",            name: "Business Credit Card Statements",       placeholder: "Upload credit card statements",                 required: true,  maxCount: 3, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
-  { key: "loan_statements",                 name: "Loan Statements",                       placeholder: "Upload loan statements",                        required: false, maxCount: 2, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
-  { key: "loc_statement",                   name: "Line of Credit Statement",              placeholder: "Upload line of credit statement",               required: false, maxCount: 1, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
-  { key: "purchase_expense",                name: "Purchase / Expense Details",            placeholder: "Upload expense documents",                      required: false, maxCount: 5, acceptedTypes: ["pdf","jpg","png","xlsx"],   notes: "" },
-  { key: "certificate_of_incorporation",    name: "Certificate of Incorporation",          placeholder: "Upload certificate of incorporation",           required: false, maxCount: 1, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
-  { key: "certificate_of_registration",     name: "Certificate of Registration",           placeholder: "Upload certificate of registration",            required: false, maxCount: 1, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
-  { key: "shareholding_register",           name: "Shareholding Register",                 placeholder: "Upload shareholding register",                  required: false, maxCount: 1, acceptedTypes: ["pdf","jpg","png","xlsx"],   notes: "" },
-  { key: "franchise_agreement",             name: "Franchise Purchase and Sell Agreement", placeholder: "Upload franchise purchase and sell agreement",   required: false, maxCount: 1, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
-  { key: "cancelled_cheque",                name: "Cancelled Cheque",                      placeholder: "Upload cancelled cheque",                       required: false, maxCount: 1, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
-  { key: "sales_invoices",                  name: "Sales Invoices",                        placeholder: "Upload sales invoices",                         required: false, maxCount: 5, acceptedTypes: ["pdf","jpg","png","xlsx"],   notes: "" },
+  { key: "loan_statements",                 name: "Loan Statements",                       placeholder: "Upload loan statements",                        required: true,  maxCount: 2, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
+  { key: "loc_statement",                   name: "Line of Credit Statement",              placeholder: "Upload line of credit statement",               required: true,  maxCount: 1, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
+  { key: "purchase_expense",                name: "Purchase / Expense Details",            placeholder: "Upload expense documents",                      required: true,  maxCount: 5, acceptedTypes: ["pdf","jpg","png","xlsx"],   notes: "" },
+  { key: "certificate_of_incorporation",    name: "Certificate of Incorporation",          placeholder: "Upload certificate of incorporation",           required: true,  maxCount: 1, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
+  { key: "certificate_of_registration",     name: "Certificate of Registration",           placeholder: "Upload certificate of registration",            required: true,  maxCount: 1, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
+  { key: "shareholding_register",           name: "Shareholding Register",                 placeholder: "Upload shareholding register",                  required: true,  maxCount: 1, acceptedTypes: ["pdf","jpg","png","xlsx"],   notes: "" },
+  { key: "franchise_agreement",             name: "Franchise Purchase and Sell Agreement", placeholder: "Upload franchise purchase and sell agreement",   required: true,  maxCount: 1, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
+  { key: "prior_year_accounting_records",   name: "Previous Year Accounting Records",      placeholder: "Upload previous T2 returns & last year financial statements", required: true,  maxCount: 5, acceptedTypes: ["pdf","jpg","png","xlsx"],   notes: "" },
+  { key: "cancelled_cheque",                name: "Cancelled Cheque",                      placeholder: "Upload cancelled cheque",                       required: true,  maxCount: 1, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
+  { key: "sales_invoices",                  name: "Sales Invoices",                        placeholder: "Upload sales invoices",                         required: true,  maxCount: 5, acceptedTypes: ["pdf","jpg","png","xlsx"],   notes: "" },
 ];
 
 interface Props {
@@ -41,7 +42,7 @@ function toFieldDraft(f: Partial<GeneralDocField>, idx: number): FieldDraft {
     key:          f.key || "",
     name:         f.name || "",
     placeholder:  f.placeholder || "",
-    required:     f.required ?? false,
+    required:     f.required ?? true,
     maxCount:     f.maxCount ?? 1,
     acceptedTypes: f.acceptedTypes ?? ["pdf","jpg","jpeg","png"],
     notes:        f.notes || "",
@@ -72,7 +73,7 @@ export function GeneralDocsConfig({ value, onChange, compact }: Props) {
   function addBlank() {
     const draft: FieldDraft = {
       key: "", name: "", placeholder: "",
-      required: false, maxCount: 1, acceptedTypes: ["pdf","jpg","jpeg","png"],
+      required: true, maxCount: 1, acceptedTypes: ["pdf","jpg","jpeg","png"],
       notes: "", displayOrder: fields.length + 1,
     };
     // Open the new row (last position) so the name input is reachable.

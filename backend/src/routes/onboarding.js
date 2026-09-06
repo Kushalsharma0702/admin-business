@@ -36,14 +36,6 @@ const ONBOARDING_SCHEMA = {
           type: "ack",
           remarkLabel: "Remarks (optional)",
         },
-        {
-          key: "payroll_enrollment_ack",
-          label:
-            "For payroll: I will return the duly filled Payroll Enrollment Form for all employees.",
-          type: "ack",
-          required: false,
-          remarkLabel: "Remarks (optional)",
-        },
       ],
     },
     {
@@ -55,10 +47,10 @@ const ONBOARDING_SCHEMA = {
         { key: "registered_address", label: "Registered Address", type: "textarea", required: true },
         { key: "incorporation_date", label: "Incorporation Date", type: "date" },
         {
-          key: "is_inactive",
-          label: "Is the corporation inactive?",
+          key: "is_active",
+          label: "Is the corporation active?",
           type: "select",
-          options: ["No", "Yes"],
+          options: ["Yes", "No"],
         },
         {
           key: "principal_activity",
@@ -105,23 +97,6 @@ const ONBOARDING_SCHEMA = {
             { key: "common_pct", label: "% Common Shares", type: "number" },
             { key: "preference_pct", label: "% Preference Shares", type: "number" },
           ],
-        },
-      ],
-    },
-    {
-      key: "prior_records",
-      title: "Prior Records & Other",
-      fields: [
-        {
-          key: "prior_records_remark",
-          label: "Previous year accounting records (previous T2 returns & last year FS)",
-          type: "textarea",
-          placeholder: "Any notes on what you can provide",
-        },
-        {
-          key: "franchise_documents_remark",
-          label: "Franchise documents (if applicable, else leave blank)",
-          type: "textarea",
         },
       ],
     },
