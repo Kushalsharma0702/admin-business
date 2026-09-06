@@ -54,14 +54,15 @@ router.get("/", async (req, res) => {
   const per_page = Math.max(1, Number(req.query.per_page || 20));
   const offset   = (page - 1) * per_page;
 
-  const statusClause = status === "all" ? "" : "AND status=$3";
+  const filtered = status !== "all";
+  const statusClause = filtered ? "AND status=$2" : "";
 
-  const listSql  = `SELECT * FROM tasks WHERE client_id=$1 ${statusClause} ORDER BY created_at DESC LIMIT $${status === "all" ? 2 : 4} OFFSET $${status === "all" ? 3 : 5}`;
+  const listSql  = `SELECT * FROM tasks WHERE client_id=$1 ${statusClause} ORDER BY created_at DESC LIMIT $${filtered ? 3 : 2} OFFSET $${filtered ? 4 : 3}`;
   const countSql = `SELECT COUNT(*)::int AS total FROM tasks WHERE client_id=$1 ${statusClause}`;
 
   const [{ rows }, { rows: cnt }] = await Promise.all([
-    db.query(listSql,  status === "all" ? [clientId, per_page, offset] : [clientId, status, per_page, offset]),
-    db.query(countSql, status === "all" ? [clientId] : [clientId, status]),
+    db.query(listSql,  filtered ? [clientId, status, per_page, offset] : [clientId, per_page, offset]),
+    db.query(countSql, filtered ? [clientId, status] : [clientId]),
   ]);
 
   return res.json(paged(rows.map(formatClientTask), "Tasks fetched successfully", page, per_page, cnt[0].total));
