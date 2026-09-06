@@ -213,12 +213,14 @@ function ClientsList() {
             </DialogDescription>
           </DialogHeader>
 
-          {/* Native scrolling, not Radix ScrollArea: `min-h-0` is what lets this
-              flex child shrink below its content height. Without it the block
-              grows past the dialog's max-h, pushing the footer off-screen and
-              leaving the overflowing fields unreachable by mouse wheel — which
-              is why the form only broke once more than ~4 doc fields were added. */}
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+          {/* A hard max-height instead of flex-1/min-h-0: the flex-shrink
+              approach (previous fix, 2026-09-03) still left this unscrollable
+              for some clients even though the CSS classes compile correctly --
+              likely a flex-basis/measurement timing issue specific to this
+              SSR-hydrated dialog. An explicit max-height never depends on the
+              parent's flex layout resolving correctly; it forces overflow
+              unconditionally once content exceeds it. */}
+          <div className="max-h-[60vh] overflow-y-auto pr-1">
             <div className="space-y-5 py-1 pr-2">
               {/* Client details */}
               <div className="space-y-3">
