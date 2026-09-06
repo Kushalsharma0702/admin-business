@@ -202,8 +202,21 @@ function ClientsList() {
 
       {/* ── Invite Client Dialog ─────────────────────────────────────────────── */}
       <Dialog open={showInvite} onOpenChange={(v) => { setShowInvite(v); if (!v) { setForm(EMPTY_FORM); setGenDocs(EMPTY_GEN_DOCS); } }}>
-        <DialogContent className="sm:max-w-lg h-[85vh] flex flex-col overflow-hidden">
-          <DialogHeader className="shrink-0">
+        {/* Two attempts at a nested flex-shrink scroll region (flex-1
+            min-h-0 on the middle child, then a definite h-[85vh] on this
+            element) both still left the region unscrollable by every input
+            method for at least one client, despite the CSS computing
+            correctly in isolation. Whatever the exact mechanism, it's
+            specific to a flex child depending on shrink math inside this
+            Radix/SSR dialog. Removing that dependency entirely: no
+            flex-col, no separately-pinned header/footer, no inner scroll
+            child -- everything (header, form, footer) sits in normal
+            document flow inside ONE scrollable, max-height-bound block.
+            This can't exhibit that bug class because there's no shrink
+            calculation left to fail. Trade-off: the footer scrolls away
+            with the rest of the content instead of staying pinned. */}
+        <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Mail className="h-5 w-5 text-primary" />
               Invite New Client
@@ -213,17 +226,7 @@ function ClientsList() {
             </DialogDescription>
           </DialogHeader>
 
-          {/* flex-1/min-h-0 only forces a shrink when the flex CONTAINER has a
-              definite height to distribute. DialogContent previously used
-              max-h-[90vh] -- a ceiling, not a height -- so it defaulted to
-              auto (shrink-to-fit content) until content happened to exceed
-              90vh; below that threshold there was nothing to distribute, so
-              this child never needed to shrink and never overflowed, no
-              matter how tall its own content got. Switching the parent to a
-              definite h-[85vh] (above) makes the shrink math run
-              unconditionally, so this reliably overflows and scrolls. */}
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1">
-            <div className="space-y-5 py-1 pr-2">
+          <div className="space-y-5 py-1">
               {/* Client details */}
               <div className="space-y-3">
                 <div className="space-y-1.5">
@@ -269,9 +272,8 @@ function ClientsList() {
                 <div className="flex items-start gap-2"><span className="text-primary font-bold mt-0.5">3.</span> Client clicks the link, sets their password, and logs in{genDocs.enabled ? ", then sees their document checklist" : ""}.</div>
               </div>
             </div>
-          </div>
 
-          <DialogFooter className="shrink-0 pt-2 border-t">
+          <DialogFooter className="pt-4 mt-2 border-t">
             <Button variant="outline" onClick={() => setShowInvite(false)}>Cancel</Button>
             <Button onClick={() => inviteMutation.mutate()}
               disabled={!form.name.trim() || !form.email.trim() || inviteMutation.isPending}>
