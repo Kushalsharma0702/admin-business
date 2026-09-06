@@ -202,7 +202,7 @@ function ClientsList() {
 
       {/* ── Invite Client Dialog ─────────────────────────────────────────────── */}
       <Dialog open={showInvite} onOpenChange={(v) => { setShowInvite(v); if (!v) { setForm(EMPTY_FORM); setGenDocs(EMPTY_GEN_DOCS); } }}>
-        <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col overflow-hidden">
+        <DialogContent className="sm:max-w-lg h-[85vh] flex flex-col overflow-hidden">
           <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2">
               <Mail className="h-5 w-5 text-primary" />
@@ -213,14 +213,16 @@ function ClientsList() {
             </DialogDescription>
           </DialogHeader>
 
-          {/* A hard max-height instead of flex-1/min-h-0: the flex-shrink
-              approach (previous fix, 2026-09-03) still left this unscrollable
-              for some clients even though the CSS classes compile correctly --
-              likely a flex-basis/measurement timing issue specific to this
-              SSR-hydrated dialog. An explicit max-height never depends on the
-              parent's flex layout resolving correctly; it forces overflow
-              unconditionally once content exceeds it. */}
-          <div className="max-h-[60vh] overflow-y-auto pr-1">
+          {/* flex-1/min-h-0 only forces a shrink when the flex CONTAINER has a
+              definite height to distribute. DialogContent previously used
+              max-h-[90vh] -- a ceiling, not a height -- so it defaulted to
+              auto (shrink-to-fit content) until content happened to exceed
+              90vh; below that threshold there was nothing to distribute, so
+              this child never needed to shrink and never overflowed, no
+              matter how tall its own content got. Switching the parent to a
+              definite h-[85vh] (above) makes the shrink math run
+              unconditionally, so this reliably overflows and scrolls. */}
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1">
             <div className="space-y-5 py-1 pr-2">
               {/* Client details */}
               <div className="space-y-3">
