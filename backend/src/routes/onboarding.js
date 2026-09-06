@@ -29,6 +29,11 @@ const ONBOARDING_SCHEMA = {
             "I have authorized Diamond Accounts on my CRA business account (per the Job Aid).",
           type: "ack",
           remarkLabel: "Remarks (optional)",
+          // Set once the firm has a hosted copy of the "Authorization
+          // Request - Job Aid" PDF -- the client app renders a "View Job
+          // Aid" link next to this checkbox whenever this is non-null.
+          attachmentUrl: null,
+          attachmentLabel: "View Job Aid",
         },
         {
           key: "incorporation_documents_ack",
