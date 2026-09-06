@@ -67,7 +67,7 @@ function buildDocStatus(config, uploads) {
           fileName:         upload.file_name,
           originalFilename: upload.original_filename,
           fileType:         upload.file_type,
-          fileSize:         upload.file_size,
+          fileSize:         Number(upload.file_size),
           s3Key:            upload.s3_key,
           uploadedAt:       upload.uploaded_at,
         } : null,
@@ -130,7 +130,7 @@ adminRouter.get("/clients/:clientId/general-docs", async (req, res) => {
       fileName:         u.file_name,
       originalFilename: u.original_filename,
       fileType:         u.file_type,
-      fileSize:         u.file_size,
+      fileSize:         Number(u.file_size),
       s3Key:            u.s3_key,
       uploadedAt:       u.uploaded_at,
     })),
@@ -286,7 +286,7 @@ clientRouter.post("/upload", upload.single("file"), async (req, res) => {
     fieldKey:    doc.field_key,
     slotIndex:   doc.slot_index,
     fileName:    doc.file_name,
-    fileSize:    doc.file_size,
+    fileSize:    Number(doc.file_size),
     uploadedAt:  doc.uploaded_at,
   }, "File uploaded successfully"));
 });
