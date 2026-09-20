@@ -8,9 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/app/EmptyState";
-import { StatusBadge } from "@/components/app/StatusBadge";
 import { fmtDate, fmtMoney } from "@/components/app/utils";
-import { Upload, FileText, StickyNote, Scale, FileQuestion, FilePlus, Receipt, Clock, Send, Plus, Loader2, WifiOff, Copy, Check } from "lucide-react";
+import { Upload, FileText, StickyNote, FileQuestion, FilePlus, Clock, Send, Plus, Loader2, WifiOff, Copy, Check } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -63,10 +62,6 @@ function ClientTab() {
     case "notes": return <Notes clientId={clientId} />;
     case "files": return <Files clientId={clientId} />;
     case "tasks": return <Tasks clientId={clientId} />;
-    case "resolution-cases": return <Resolution clientId={clientId} />;
-    case "organizers": return <Organizers clientId={clientId} />;
-    case "transcripts": return <Transcripts clientId={clientId} />;
-    case "billing": return <Billing clientId={clientId} />;
     case "time-entries": return <TimeEntries clientId={clientId} />;
     case "general-docs": return <GeneralDocs clientId={clientId} />;
     case "onboarding":   return <OnboardingTab clientId={clientId} />;
@@ -98,10 +93,6 @@ function Home({ clientId }: { clientId: string }) {
       <Card className="p-5">
         <div className="flex justify-between items-center mb-3"><h3 className="font-semibold">Notes</h3><a href={`/clients/${clientId}/notes`} className="text-primary text-sm">Add a note</a></div>
         <EmptyState icon={StickyNote} title="No notes" description="There are no notes for this client." actionLabel="Add note" onAction={() => toast.info("Open Notes tab")} />
-      </Card>
-      <Card className="p-5">
-        <div className="flex justify-between items-center mb-3"><h3 className="font-semibold">Resolution Cases</h3><a href={`/clients/${clientId}/resolution-cases`} className="text-primary text-sm">Create resolution case</a></div>
-        <EmptyState icon={Scale} title="No active resolution cases" description="Track IRS issues for this client." actionLabel="Create resolution case" onAction={() => toast.info("Open Resolution Cases tab")} />
       </Card>
     </div>
   );
@@ -650,34 +641,6 @@ function Tasks({ clientId }: { clientId: string }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
-  );
-}
-
-function Resolution({ clientId }: { clientId: string }) {
-  void clientId;
-  return <Card className="p-5"><EmptyState icon={Scale} title="No active resolution cases" description="Track tax resolution work for this client." actionLabel="Create resolution case" onAction={() => toast.success("Resolution case created")} /></Card>;
-}
-function Organizers({ clientId }: { clientId: string }) { void clientId; return <Card className="p-5"><EmptyState icon={FileQuestion} title="No organizers sent" description="Send a tax organizer to gather client info." actionLabel="Send organizer" onAction={() => toast.success("Organizer sent")} /></Card>; }
-function Transcripts({ clientId }: { clientId: string }) { void clientId; return <Card className="p-5"><EmptyState icon={FileText} title="No transcripts" description="Request IRS transcripts for this client." actionLabel="Request transcript" onAction={() => toast.success("Transcript requested")} /></Card>; }
-
-function Billing({ clientId }: { clientId: string }) {
-  const allBilling = useAppStore((s) => s.billing);
-  const items = useMemo(() => allBilling.filter((b) => b.clientId === clientId), [allBilling, clientId]);
-  const totalBilled = useMemo(() => items.reduce((a, b) => a + b.amount, 0), [items]);
-  const totalPaid = useMemo(() => items.filter((b) => b.status === "Paid").reduce((a, b) => a + b.amount, 0), [items]);
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-4">
-        <Card className="p-4"><div className="text-xs text-muted-foreground">Total billed</div><div className="text-xl font-semibold">{fmtMoney(totalBilled)}</div></Card>
-        <Card className="p-4"><div className="text-xs text-muted-foreground">Total paid</div><div className="text-xl font-semibold text-emerald-600">{fmtMoney(totalPaid)}</div></Card>
-        <Card className="p-4"><div className="text-xs text-muted-foreground">Outstanding</div><div className="text-xl font-semibold text-rose-600">{fmtMoney(totalBilled - totalPaid)}</div></Card>
-      </div>
-      <Card className="p-0 overflow-hidden">
-        <div className="px-4 py-3 border-b border-border flex justify-between"><span className="font-semibold text-sm">Invoices</span><Button size="sm" onClick={() => toast.success("Invoice draft created")}><Receipt className="w-4 h-4 mr-1" />Create invoice</Button></div>
-        <table className="w-full text-sm"><thead className="text-xs uppercase text-muted-foreground bg-muted/40"><tr><th className="text-left px-4 py-2">Invoice #</th><th className="text-left px-4 py-2">Date</th><th className="text-left px-4 py-2">Description</th><th className="text-right px-4 py-2">Amount</th><th className="text-left px-4 py-2 pl-6">Status</th></tr></thead>
-          <tbody>{items.map((b) => <tr key={b.id} className="border-b border-border last:border-0"><td className="px-4 py-2.5 font-medium">{b.invoiceNumber}</td><td className="px-4 py-2.5">{fmtDate(b.date)}</td><td className="px-4 py-2.5">{b.description}</td><td className="px-4 py-2.5 text-right">{fmtMoney(b.amount)}</td><td className="px-4 py-2.5 pl-6"><StatusBadge status={b.status} /></td></tr>)}</tbody></table>
-      </Card>
     </div>
   );
 }

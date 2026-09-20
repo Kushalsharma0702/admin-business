@@ -14,8 +14,7 @@ export const Route = createFileRoute("/clients/$clientId")({ component: ClientLa
 const tabs = [
   ["home", "Home"], ["client-take-on", "Client Take-On"], ["onboarding", "On-Boarding"], ["general-docs", "General Docs"], ["tasks", "Tasks"],
   ["communication", "Communication"], ["notes", "Notes"], ["files", "Files"],
-  ["resolution-cases", "Resolution Cases"], ["organizers", "Organizers"],
-  ["transcripts", "Transcripts"], ["billing", "Billing"], ["time-entries", "Time Entries"],
+  ["time-entries", "Time Entries"],
   ["profiles", "Profiles"],
 ] as const;
 

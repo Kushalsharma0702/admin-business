@@ -41,6 +41,7 @@ function ClientStatusBadge({ status }: { status: string }) {
 function TasksPage() {
   const navigate = useNavigate();
   const [adminStatusFilter, setAdminStatusFilter] = useState<string>("All");
+  const [taskTypeFilter, setTaskTypeFilter] = useState<string>("All");
   const [q, setQ] = useState("");
 
   const { data, isLoading, isError } = useQuery({
@@ -51,8 +52,10 @@ function TasksPage() {
   });
 
   const all: ApiTask[] = data?.data ?? [];
+  const taskTypes = Array.from(new Set(all.map((t) => t.taskType).filter((t): t is string => !!t))).sort();
   const filtered = all.filter((t) =>
     (adminStatusFilter === "All" || t.adminStatus === adminStatusFilter) &&
+    (taskTypeFilter === "All" || t.taskType === taskTypeFilter) &&
     (t.title.toLowerCase().includes(q.toLowerCase()) || (t.clientName ?? "").toLowerCase().includes(q.toLowerCase()))
   );
 
@@ -72,7 +75,17 @@ function TasksPage() {
         ))}
       </div>
 
-      <Input placeholder="Search tasks or client…" value={q} onChange={(e) => setQ(e.target.value)} className="max-w-sm mb-4" />
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <Input placeholder="Search tasks or client…" value={q} onChange={(e) => setQ(e.target.value)} className="max-w-sm" />
+        <select
+          value={taskTypeFilter}
+          onChange={(e) => setTaskTypeFilter(e.target.value)}
+          className="h-9 text-sm border border-border rounded-md px-2 bg-background text-foreground"
+        >
+          <option value="All">All task types</option>
+          {taskTypes.map((tt) => <option key={tt} value={tt}>{tt}</option>)}
+        </select>
+      </div>
 
       {isLoading && (
         <div className="flex items-center gap-2 text-muted-foreground py-8 justify-center">
