@@ -28,7 +28,7 @@ function LoginPage() {
       login(res.data.token, res.data.user);
       toast.success(`Welcome back, ${res.data.user.name}!`);
 
-      if (res.data.user.role === "admin") {
+      if (res.data.user.role === "admin" || res.data.user.role === "superadmin") {
         navigate({ to: "/dashboard" });
       } else {
         navigate({ to: "/portal" });

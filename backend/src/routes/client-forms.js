@@ -3,6 +3,7 @@ const express = require("express");
 const db = require("../db");
 const { fail, ok, paged, formatSubmission, formatTemplateVersion, formatTask } = require("../helpers");
 const { requireAuth } = require("../middleware/auth");
+const { notifyTaskChange } = require("../notify-task-change");
 
 const router = express.Router();
 router.use(requireAuth("client"));
@@ -12,7 +13,7 @@ router.get("/tasks/:taskId/form", async (req, res) => {
   const clientId = req.user.sub;
 
   const { rows: [task] } = await db.query(
-    "SELECT * FROM tasks WHERE id=$1 AND client_id=$2",
+    "SELECT * FROM tasks WHERE id=$1 AND client_id=$2 AND (open_date IS NULL OR open_date <= CURRENT_DATE)",
     [req.params.taskId, clientId]
   );
   if (!task) return res.status(404).json(fail("Task not found"));
@@ -53,7 +54,7 @@ router.put("/tasks/:taskId/form/draft", async (req, res) => {
   const clientId = req.user.sub;
 
   const { rows: [task] } = await db.query(
-    "SELECT * FROM tasks WHERE id=$1 AND client_id=$2",
+    "SELECT * FROM tasks WHERE id=$1 AND client_id=$2 AND (open_date IS NULL OR open_date <= CURRENT_DATE)",
     [req.params.taskId, clientId]
   );
   if (!task) return res.status(404).json(fail("Task not found"));
@@ -94,7 +95,7 @@ router.post("/tasks/:taskId/form/submit", async (req, res) => {
   const clientId = req.user.sub;
 
   const { rows: [task] } = await db.query(
-    "SELECT * FROM tasks WHERE id=$1 AND client_id=$2",
+    "SELECT * FROM tasks WHERE id=$1 AND client_id=$2 AND (open_date IS NULL OR open_date <= CURRENT_DATE)",
     [req.params.taskId, clientId]
   );
   if (!task) return res.status(404).json(fail("Task not found"));
@@ -168,6 +169,7 @@ router.post("/tasks/:taskId/form/submit", async (req, res) => {
     "UPDATE tasks SET status='complete', completed_at=NOW(), updated_at=NOW() WHERE id=$1",
     [task.id]
   );
+  notifyTaskChange(task, "submitted");
 
   return res.json(ok({
     submissionId: submission.id,

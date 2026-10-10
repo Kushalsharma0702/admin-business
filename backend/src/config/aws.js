@@ -151,6 +151,52 @@ async function sendClientTakeOnCompletedEmail({
   return ses.send(cmd);
 }
 
+async function sendTaskChangeNotification({
+  toEmail,
+  clientName,
+  taskTitle,
+  taskType,
+  action, // human-readable, e.g. "marked complete" / "submitted"
+}) {
+  const htmlBody = `
+    <div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px">
+      <div style="background:#4f46e5;padding:20px 24px;border-radius:8px 8px 0 0">
+        <h1 style="color:#fff;margin:0;font-size:20px">Diamond Accounts Tax</h1>
+      </div>
+      <div style="background:#f8fafc;padding:32px 24px;border-radius:0 0 8px 8px;border:1px solid #e2e8f0;border-top:none">
+        <h2 style="color:#1e293b;margin-top:0">A client task was ${action}</h2>
+        <ul style="color:#475569;line-height:1.6">
+          <li><strong>Client:</strong> ${clientName || "-"}</li>
+          <li><strong>Task:</strong> ${taskTitle || "-"}</li>
+          <li><strong>Task Type:</strong> ${taskType || "-"}</li>
+        </ul>
+      </div>
+    </div>
+  `;
+
+  const textBody = [
+    `A client task was ${action}`,
+    "",
+    `Client: ${clientName || "-"}`,
+    `Task: ${taskTitle || "-"}`,
+    `Task Type: ${taskType || "-"}`,
+  ].join("\n");
+
+  const cmd = new SendEmailCommand({
+    Source: `${env.SES_FROM_NAME} <${env.SES_FROM_EMAIL}>`,
+    Destination: { ToAddresses: [toEmail] },
+    Message: {
+      Subject: { Data: `[${taskType || "Task"}] ${taskTitle || "Task"} — ${action}` },
+      Body: {
+        Html: { Data: htmlBody, Charset: "UTF-8" },
+        Text: { Data: textBody, Charset: "UTF-8" },
+      },
+    },
+  });
+
+  return ses.send(cmd);
+}
+
 // ── S3 ────────────────────────────────────────────────────────────────────────
 
 async function getPresignedUploadUrl({ bucket, key, contentType, expiresIn }) {
@@ -191,6 +237,7 @@ module.exports = {
   s3,
   sendInviteEmail,
   sendClientTakeOnCompletedEmail,
+  sendTaskChangeNotification,
   getPresignedUploadUrl,
   getDownloadUrl,
   putObject,

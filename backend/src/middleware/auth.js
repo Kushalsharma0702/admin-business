@@ -81,8 +81,11 @@ function requireAuth(role) {
 
     if (role) {
       // Accept portal tokens (role:"client"), Flutter/Python tokens (role:"user",type:"access"),
-      // and legacy no-role tokens (type:"access") as valid client tokens.
+      // legacy no-role tokens (type:"access") as valid client tokens, and
+      // superadmin tokens anywhere an "admin" token is required (superadmin
+      // is a strict superset of admin access).
       const isClientToken = payload.role === role
+        || (role === "admin" && payload.role === "superadmin")
         || (role === "client" && payload.type === "access" && (!payload.role || payload.role === "user"));
       if (!isClientToken) {
         return res.status(403).json({ success: false, message: "Forbidden: insufficient role" });

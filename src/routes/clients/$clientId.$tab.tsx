@@ -1,7 +1,7 @@
 import { createFileRoute, useParams, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore, uid } from "@/store/useAppStore";
-import { clientsApi, tasksApi, metaApi, generalDocsAdminApi, profilesAdminApi, onboardingAdminApi, clientTakeOnAdminApi, ADMIN_STATUSES, type ApiTask, type AdminStatus, type TaskTypeInfo, type GeneralDocField, type GeneralDocStatus, type UserProfile, type OnboardingSection, type OnboardingField, type ConfigFieldDef } from "@/lib/api";
+import { clientsApi, tasksApi, metaApi, generalDocsAdminApi, profilesAdminApi, onboardingAdminApi, clientTakeOnAdminApi, notesAdminApi, ADMIN_STATUSES, type ApiTask, type AdminStatus, type TaskTypeInfo, type GeneralDocField, type GeneralDocStatus, type UserProfile, type OnboardingSection, type OnboardingField, type ConfigFieldDef, type ClientNote } from "@/lib/api";
 import { GeneralDocsConfig } from "@/components/app/GeneralDocsConfig";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/app/EmptyState";
 import { fmtDate, fmtMoney } from "@/components/app/utils";
-import { Upload, FileText, StickyNote, FileQuestion, FilePlus, Clock, Send, Plus, Loader2, WifiOff, Copy, Check } from "lucide-react";
+import { Upload, FileText, StickyNote, FileQuestion, FilePlus, Clock, Send, Plus, Loader2, WifiOff, Copy, Check, ImagePlus, ImageIcon, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -124,22 +124,158 @@ function Communication({ clientId }: { clientId: string }) {
   );
 }
 
+// Internal-only: notes and their images are never exposed to the client app.
 function Notes({ clientId }: { clientId: string }) {
-  const allNotes = useAppStore((s) => s.notes);
-  const addNote = useAppStore((s) => s.addNote);
-  const notes = useMemo(() => allNotes.filter((n) => n.clientId === clientId), [allNotes, clientId]);
+  const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
+  const [pendingImages, setPendingImages] = useState<File[]>([]);
+
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ["client-notes", clientId],
+    queryFn: () => notesAdminApi.list(clientId),
+  });
+  const notes = data?.data.notes ?? [];
+
+  const createMutation = useMutation({
+    mutationFn: () => notesAdminApi.create(clientId, text.trim(), pendingImages),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["client-notes", clientId] });
+      setText(""); setPendingImages([]); setOpen(false);
+      toast.success("Note added");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const addImagesMutation = useMutation({
+    mutationFn: ({ noteId, files }: { noteId: string; files: File[] }) => notesAdminApi.addImages(noteId, files),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["client-notes", clientId] });
+      toast.success("Image(s) added");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const deleteImageMutation = useMutation({
+    mutationFn: (imageId: string) => notesAdminApi.deleteImage(imageId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["client-notes", clientId] }),
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const viewImage = async (imageId: string) => {
+    try {
+      const res = await notesAdminApi.getImageDownloadUrl(imageId);
+      window.open(res.data.downloadUrl, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not open image");
+    }
+  };
+
+  if (isLoading) return (
+    <Card className="p-5"><div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div></Card>
+  );
+  if (isError) return (
+    <Card className="p-5"><div className="flex flex-col items-center gap-3 py-8 text-muted-foreground"><WifiOff className="h-8 w-8" /><p>Could not load notes.</p><Button variant="outline" size="sm" onClick={() => refetch()}>Retry</Button></div></Card>
+  );
+
   return (
     <Card className="p-5">
-      <div className="flex justify-between mb-4"><h3 className="font-semibold">Notes</h3><Button size="sm" onClick={() => setOpen(true)}><Plus className="w-4 h-4 mr-1" />Add note</Button></div>
-      {notes.length === 0 ? <EmptyState icon={StickyNote} title="No notes" description="There are no notes for this client." actionLabel="Add note" onAction={() => setOpen(true)} /> :
-        <div className="space-y-3">{notes.map((n) => (<div key={n.id} className="p-3 border border-border rounded"><div className="text-xs text-muted-foreground mb-1">{n.author} • {n.createdAt}</div><div className="text-sm">{n.text}</div></div>))}</div>}
-      <Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Add note</DialogTitle></DialogHeader>
-        <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} placeholder="Note text…" />
-        <DialogFooter><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={() => { if (!text.trim()) return; addNote({ id: uid(), clientId, text, author: "Angela Martin", createdAt: new Date().toLocaleString() }); setText(""); setOpen(false); toast.success("Note added"); }}>Save</Button>
-        </DialogFooter></DialogContent></Dialog>
+      <div className="flex justify-between mb-4">
+        <h3 className="font-semibold">Notes</h3>
+        <Button size="sm" onClick={() => setOpen(true)}><Plus className="w-4 h-4 mr-1" />Add note</Button>
+      </div>
+      <p className="text-xs text-muted-foreground -mt-3 mb-4">Internal — visible to admin staff only, never shown to the client.</p>
+      {notes.length === 0 ? (
+        <EmptyState icon={StickyNote} title="No notes" description="There are no notes for this client." actionLabel="Add note" onAction={() => setOpen(true)} />
+      ) : (
+        <div className="space-y-3">
+          {notes.map((n: ClientNote) => (
+            <div key={n.id} className="p-3 border border-border rounded">
+              <div className="flex items-center justify-between mb-1">
+                <div className="text-xs text-muted-foreground">{n.authorName ?? "Admin"} • {fmtDate(n.createdAt)}</div>
+                <label className="inline-flex cursor-pointer text-xs text-primary hover:underline items-center gap-1">
+                  <ImagePlus className="w-3.5 h-3.5" /> Add image
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files ?? []);
+                      if (files.length) addImagesMutation.mutate({ noteId: n.id, files });
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+              {n.text && <div className="text-sm whitespace-pre-wrap">{n.text}</div>}
+              {n.images.length > 0 && (
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {n.images.map((img) => (
+                    <div key={img.id} className="group/img relative">
+                      <button
+                        type="button"
+                        onClick={() => viewImage(img.id)}
+                        className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-muted text-xs hover:bg-muted/70"
+                        title={img.originalFilename}
+                      >
+                        <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
+                        <span className="max-w-[140px] truncate">{img.originalFilename}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => deleteImageMutation.mutate(img.id)}
+                        className="absolute -top-1.5 -right-1.5 hidden group-hover/img:flex items-center justify-center w-4 h-4 rounded-full bg-destructive text-destructive-foreground"
+                        title="Remove image"
+                      >
+                        <X className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Add note</DialogTitle></DialogHeader>
+          <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} placeholder="Note text…" />
+          <label className="inline-flex cursor-pointer text-sm text-primary hover:underline items-center gap-1.5 w-fit">
+            <ImagePlus className="w-4 h-4" /> Attach image(s)
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => setPendingImages((prev) => [...prev, ...Array.from(e.target.files ?? [])])}
+            />
+          </label>
+          {pendingImages.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {pendingImages.map((f, i) => (
+                <div key={i} className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-muted text-xs">
+                  <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
+                  <span className="max-w-[140px] truncate">{f.name}</span>
+                  <button type="button" onClick={() => setPendingImages((prev) => prev.filter((_, idx) => idx !== i))}>
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setOpen(false); setText(""); setPendingImages([]); }}>Cancel</Button>
+            <Button
+              onClick={() => { if (!text.trim() && pendingImages.length === 0) return; createMutation.mutate(); }}
+              disabled={createMutation.isPending}
+            >
+              {createMutation.isPending ? <><Loader2 className="h-4 w-4 animate-spin mr-1" />Saving…</> : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
@@ -260,6 +396,8 @@ function Tasks({ clientId }: { clientId: string }) {
     taskType: "CORPORATE_TAX_RETURN" as string,
     adminStatus: "Data not received" as AdminStatus,
     description: "",
+    openDate: "",
+    dueDate: "",
   });
   const [updatingId, setUpdatingId] = useState<string | null>(null);
 
@@ -360,11 +498,17 @@ function Tasks({ clientId }: { clientId: string }) {
         taskType: form.taskType,
         selectedSubtasks,
         adminStatus: form.adminStatus,
+        openDate: form.openDate || undefined,
+        dueDate: form.dueDate || undefined,
         config: Object.keys(configPayload).length ? configPayload : undefined,
       });
-      toast.success("Task assigned to client");
+      toast.success(
+        form.openDate && form.openDate > new Date().toISOString().slice(0, 10)
+          ? `Task scheduled — will appear for the client automatically on ${form.openDate}`
+          : "Task assigned to client"
+      );
       setOpen(false);
-      setForm({ title: "", taskType: "CORPORATE_TAX_RETURN", adminStatus: "Data not received", description: "" });
+      setForm({ title: "", taskType: "CORPORATE_TAX_RETURN", adminStatus: "Data not received", description: "", openDate: "", dueDate: "" });
       setConfig({});
       setHstMainTasks(HST_MAIN_TASK_OPTIONS.map((o) => o.key));
       setSelectedSubtasks([]);
@@ -553,6 +697,22 @@ function Tasks({ clientId }: { clientId: string }) {
               <Textarea placeholder="Instructions shown to the client…" value={form.description}
                 onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} className="mt-1" />
             </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Open date (optional)</label>
+                <Input type="date" value={form.openDate}
+                  onChange={(e) => setForm({ ...form, openDate: e.target.value })} className="mt-1" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Due date (optional)</label>
+                <Input type="date" value={form.dueDate}
+                  onChange={(e) => setForm({ ...form, dueDate: e.target.value })} className="mt-1" />
+              </div>
+            </div>
+            <p className="text-[11px] text-muted-foreground -mt-2">
+              Leave open date blank to assign immediately. Set a future date to schedule it — the task appears for the client on its own that day, no approval step needed.
+            </p>
 
             {/* ── Task-type config fields (e.g. Payroll: pay date, frequency, WCB…) ── */}
             {activeSchema.length > 0 && (

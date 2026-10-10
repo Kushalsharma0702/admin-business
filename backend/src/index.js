@@ -57,6 +57,15 @@ app.use("/v3/api/v1/onboarding",   clientOnboarding);
 const { adminRouter: adminClientTakeOn } = require("./routes/client-take-on");
 app.use("/api/admin",                 adminClientTakeOn);
 
+const { adminRouter: adminClientNotes } = require("./routes/client-notes");
+app.use("/api/admin",                 adminClientNotes);
+
+// Superadmin: staff account management, permissions, audit log
+app.use("/api/admin",                 require("./routes/admin-users"));
+
+// Superadmin (manage_notifications permission): task-type -> notification email
+app.use("/api/admin",                 require("./routes/notification-configs"));
+
 // Client auth — customer-type lookup for Flutter post-login
 app.use("/v3/api/v1/auth",     require("./routes/client-auth"));
 

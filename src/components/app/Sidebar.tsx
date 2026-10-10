@@ -1,6 +1,7 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { Home, Bell, Users, Folder, CheckSquare, Clock, CreditCard, Layout, BarChart2, Receipt, Landmark, GitBranch, Settings, FileText } from "lucide-react";
+import { Home, Bell, Users, Folder, CheckSquare, Clock, CreditCard, Layout, BarChart2, Receipt, Landmark, GitBranch, Settings, FileText, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuthStore } from "@/store/useAuthStore";
 
 const canopyItems = [
   { to: "/dashboard", label: "Dashboard", icon: Home },
@@ -25,6 +26,7 @@ const dextItems = [
 
 export function Sidebar() {
   const path = useRouterState({ select: (s) => s.location.pathname });
+  const isSuperAdmin = useAuthStore((s) => s.user?.role === "superadmin");
 
   const Item = (it: { to: string; label: string; icon: typeof Home }) => {
     const active = path === it.to || path.startsWith(it.to + "/");
@@ -60,6 +62,7 @@ export function Sidebar() {
         {dextItems.map(Item)}
       </nav>
       <div className="border-t border-white/5 py-2">
+        {isSuperAdmin && Item({ to: "/admins", label: "Admins", icon: ShieldCheck })}
         <Link
           to="/settings"
           className="flex items-center gap-3 mx-2 px-3 h-10 rounded-md text-sidebar-fg hover:bg-white/5 hover:text-white text-[13px] font-medium"

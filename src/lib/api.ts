@@ -277,10 +277,14 @@ async function request<T>(
   options: RequestInit = {},
 ): Promise<T> {
   const token = getToken();
+  // FormData bodies must NOT get an explicit Content-Type — the browser needs
+  // to set its own "multipart/form-data; boundary=..." or the server can't
+  // parse the upload.
+  const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers ?? {}),
     },
@@ -297,6 +301,59 @@ export const authApi = {
       method: "POST",
       body: JSON.stringify({ email, password }),
     }),
+};
+
+// ─── Superadmin — Staff accounts, permissions, audit log ─────────────────────
+export type AdminUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: "admin" | "superadmin";
+  permissions: string[];
+  isActive: boolean;
+  createdAt: string;
+};
+export type AuditLogEntry = {
+  id: string;
+  adminId?: string;
+  adminName: string | null;
+  action: string;
+  targetType: string | null;
+  targetId: string | null;
+  details: Record<string, unknown>;
+  createdAt: string;
+};
+export const adminUsersApi = {
+  list: () => request<{ success: boolean; data: AdminUser[] }>("/api/admin/admins"),
+  permissionKeys: () => request<{ success: boolean; data: string[] }>("/api/admin/permission-keys"),
+  create: (body: { name: string; email: string; password: string; permissions?: string[] }) =>
+    request<{ success: boolean; data: AdminUser }>("/api/admin/admins", {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  update: (id: string, body: { permissions?: string[]; isActive?: boolean }) =>
+    request<{ success: boolean; data: AdminUser }>(`/api/admin/admins/${id}`, {
+      method: "PATCH", body: JSON.stringify(body),
+    }),
+  remove: (id: string) =>
+    request<{ success: boolean; data: { id: string } }>(`/api/admin/admins/${id}`, { method: "DELETE" }),
+  logsFor: (id: string) =>
+    request<{ success: boolean; data: AuditLogEntry[] }>(`/api/admin/admins/${id}/logs`),
+  auditLog: (page = 1, per_page = 50) =>
+    request<{ success: boolean; data: { entries: AuditLogEntry[]; page: number; perPage: number; total: number } }>(
+      `/api/admin/audit-log?page=${page}&per_page=${per_page}`
+    ),
+};
+
+// ─── Superadmin — Task-type notification routing ─────────────────────────────
+export type NotificationConfig = { taskType: string; email: string; updatedAt: string };
+export const notificationConfigsApi = {
+  list: () => request<{ success: boolean; data: NotificationConfig[] }>("/api/admin/notification-configs"),
+  save: (taskType: string, email: string) =>
+    request<{ success: boolean; data: NotificationConfig }>(`/api/admin/notification-configs/${taskType}`, {
+      method: "PUT", body: JSON.stringify({ email }),
+    }),
+  remove: (taskType: string) =>
+    request<{ success: boolean }>(`/api/admin/notification-configs/${taskType}`, { method: "DELETE" }),
 };
 
 // ─── Admin — Clients ──────────────────────────────────────────────────────────
@@ -503,6 +560,52 @@ export const generalDocsAdminApi = {
   getDownloadUrl: (uploadId: string) =>
     request<{ success: boolean; data: { downloadUrl: string; fileName: string } }>(
       `/api/admin/general-docs/uploads/${uploadId}/download`
+    ),
+};
+
+// ─── Admin — Client Notes (internal, with optional image attachments) ────────
+export type ClientNoteImage = {
+  id: string;
+  originalFilename: string;
+  fileType: string | null;
+  fileSize: number;
+  uploadedAt: string;
+};
+export type ClientNote = {
+  id: string;
+  text: string;
+  authorName: string | null;
+  createdAt: string;
+  updatedAt: string;
+  images: ClientNoteImage[];
+};
+export const notesAdminApi = {
+  list: (clientId: string) =>
+    request<{ success: boolean; data: { clientId: string; notes: ClientNote[] } }>(
+      `/api/admin/clients/${clientId}/notes`
+    ),
+  create: (clientId: string, text: string, images: File[] = []) => {
+    const form = new FormData();
+    form.append("text", text);
+    images.forEach((f) => form.append("images", f));
+    return request<{ success: boolean; data: ClientNote }>(
+      `/api/admin/clients/${clientId}/notes`,
+      { method: "POST", body: form }
+    );
+  },
+  addImages: (noteId: string, images: File[]) => {
+    const form = new FormData();
+    images.forEach((f) => form.append("images", f));
+    return request<{ success: boolean; data: ClientNoteImage[] }>(
+      `/api/admin/notes/${noteId}/images`,
+      { method: "POST", body: form }
+    );
+  },
+  deleteImage: (imageId: string) =>
+    request<{ success: boolean }>(`/api/admin/notes/images/${imageId}`, { method: "DELETE" }),
+  getImageDownloadUrl: (imageId: string) =>
+    request<{ success: boolean; data: { downloadUrl: string; fileName: string } }>(
+      `/api/admin/notes/images/${imageId}/download`
     ),
 };
 

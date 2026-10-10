@@ -7,22 +7,28 @@ const { requireAuth } = require("../middleware/auth");
 const { buildClientTaskDetails } = require("../task-details-service");
 const { enrichTaskWithConfig, mergeConfigUpdate } = require("../config-fields");
 const { buildDocumentRequirements, validateUploadSlot } = require("../document-requirements");
+const { notifyTaskChange } = require("../notify-task-change");
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 router.use(requireAuth("client"));
 
+// A task only becomes visible to the client once its scheduled open_date
+// arrives (or it was never scheduled at all) — no admin approval step needed,
+// it just appears on its own the day it opens.
+const OPEN_DATE_CLAUSE = "(open_date IS NULL OR open_date <= CURRENT_DATE)";
+
 // Resolve task by UUID or legacy slug (e.g. task-john-onboarding from mobile app)
 async function findClientTask(taskIdOrSlug, clientId) {
   if (isUuid(taskIdOrSlug)) {
     const { rows } = await db.query(
-      "SELECT * FROM tasks WHERE id=$1 AND client_id=$2",
+      `SELECT * FROM tasks WHERE id=$1 AND client_id=$2 AND ${OPEN_DATE_CLAUSE}`,
       [taskIdOrSlug, clientId]
     );
     return rows[0] || null;
   }
   const { rows } = await db.query(
-    "SELECT * FROM tasks WHERE slug=$1 AND client_id=$2",
+    `SELECT * FROM tasks WHERE slug=$1 AND client_id=$2 AND ${OPEN_DATE_CLAUSE}`,
     [taskIdOrSlug, clientId]
   );
   return rows[0] || null;
@@ -57,8 +63,8 @@ router.get("/", async (req, res) => {
   const filtered = status !== "all";
   const statusClause = filtered ? "AND status=$2" : "";
 
-  const listSql  = `SELECT * FROM tasks WHERE client_id=$1 ${statusClause} ORDER BY created_at DESC LIMIT $${filtered ? 3 : 2} OFFSET $${filtered ? 4 : 3}`;
-  const countSql = `SELECT COUNT(*)::int AS total FROM tasks WHERE client_id=$1 ${statusClause}`;
+  const listSql  = `SELECT * FROM tasks WHERE client_id=$1 AND ${OPEN_DATE_CLAUSE} ${statusClause} ORDER BY created_at DESC LIMIT $${filtered ? 3 : 2} OFFSET $${filtered ? 4 : 3}`;
+  const countSql = `SELECT COUNT(*)::int AS total FROM tasks WHERE client_id=$1 AND ${OPEN_DATE_CLAUSE} ${statusClause}`;
 
   const [{ rows }, { rows: cnt }] = await Promise.all([
     db.query(listSql,  filtered ? [clientId, status, per_page, offset] : [clientId, per_page, offset]),
@@ -120,6 +126,7 @@ router.post("/:task_id/complete", async (req, res) => {
     "UPDATE tasks SET status='complete', completion_note=$1, completed_at=NOW(), updated_at=NOW() WHERE id=$2 RETURNING *",
     [req.body?.completionNote || null, row.id]
   );
+  notifyTaskChange(updated, "marked complete");
   return res.json(ok({ id: updated.id, title: updated.title, status: "complete", updatedAt: updated.updated_at }, "Task marked as completed"));
 });
 
@@ -165,6 +172,7 @@ router.post("/:task_id/query-sheet/upload", upload.single("file"), async (req, r
     "UPDATE tasks SET status='complete', completed_at=NOW(), updated_at=NOW() WHERE id=$1 RETURNING *",
     [task.id]
   );
+  notifyTaskChange(updated, "completed (query sheet uploaded)");
   return res.json(ok({
     taskId:           task.id,
     status:           "complete",
@@ -313,6 +321,7 @@ router.post("/:task_id/submit-form", async (req, res) => {
      WHERE id=$2 RETURNING *`,
     [JSON.stringify(merged), task.id]
   );
+  notifyTaskChange(updated, "submitted");
 
   return res.json(ok({
     taskId:      updated.id,
@@ -335,6 +344,7 @@ router.post("/:task_id/documents/submit", async (req, res) => {
     "UPDATE tasks SET status='complete', completed_at=NOW(), updated_at=NOW() WHERE id=$1 RETURNING *",
     [task.id]
   );
+  notifyTaskChange(updated, "completed (documents submitted)");
   return res.json(ok({
     taskId:         task.id,
     status:         "complete",
