@@ -3,6 +3,29 @@ const db = require("../db");
 const { fail, ok } = require("../helpers");
 const { requireAuth } = require("../middleware/auth");
 const { sendClientTakeOnCompletedEmail } = require("../config/aws");
+const { generateTasksForClient } = require("../task-generation");
+
+// Bridges this form's bookkeeping_period/bookkeeping_first_date answers (what
+// the client/staff actually fill in) into the field names schedule.js's
+// bookkeepingPeriods() reads (bookkeepingFrequency/bookkeepingQuarterOption) —
+// these evolved as two separate representations of the same concept; this is
+// the one place that reconciles them so submitting this form actually drives
+// real task generation instead of just being stored, unused, in answers JSON.
+const QUARTER_GROUP_BY_MONTH_MOD3 = { 1: "Jan/Apr/Jul/Oct", 2: "Feb/May/Aug/Nov", 0: "Mar/Jun/Sep/Dec" };
+
+function bookkeepingConfigFromAnswers(answers) {
+  const freq = answers.bookkeeping_period;
+  if (!freq) return null;
+  const config = { bookkeepingFrequency: freq };
+  if (answers.bookkeeping_first_date) {
+    config.bookkeepingFirstDate = answers.bookkeeping_first_date;
+    if (freq === "Quarterly") {
+      const month = Number(String(answers.bookkeeping_first_date).slice(5, 7));
+      config.bookkeepingQuarterOption = QUARTER_GROUP_BY_MONTH_MOD3[month % 3];
+    }
+  }
+  return config;
+}
 
 const CLIENT_TAKE_ON_NOTIFY_EMAIL = process.env.CLIENT_TAKE_ON_NOTIFY_EMAIL || "admin@diamondaccounts.ca";
 
@@ -115,6 +138,9 @@ const CLIENT_TAKE_ON_SCHEMA = {
       title: "Services",
       fields: [
         { key: "bookkeeping_period", label: "Bookkeeping Period", type: "select", options: ["Weekly", "Monthly", "Quarterly", "Yearly"] },
+        { key: "bookkeeping_first_date", label: "First Bookkeeping Date", type: "date" },
+        { key: "bookkeeping_method", label: "Bookkeeping Method", type: "select", options: ["Paper record", "Spreadsheet", "Desktop", "Online"] },
+        { key: "accounting_software", label: "Accounting Software", type: "select", options: ["Quickbook", "Xero", "Zoho", "VT"] },
         { key: "payroll_period", label: "Payroll Period", type: "select", options: ["Weekly", "Monthly", "Bi-Weekly", "Four-Weekly", "15th and Last day of Month", "Six-Monthly", "Annual"] },
         { key: "hst_period", label: "HST Period", type: "select", options: ["Monthly", "Quarterly", "Yearly", "Jan/Apr/Jul/Oct", "Feb/May/Aug/Nov", "Mar/Jun/Sept/Dec"] },
         { key: "corporation_tax_period", label: "Corporation Tax Period", type: "select", options: ["Yearly"] },
@@ -237,6 +263,13 @@ adminRouter.put("/clients/:clientId/client-take-on", async (req, res) => {
     }).catch((err) => {
       console.error("Client take-on completion email failed:", err.message);
     });
+
+    const bkConfig = bookkeepingConfigFromAnswers(answers);
+    if (bkConfig) {
+      generateTasksForClient(client.id, bkConfig, req.user.sub).catch((err) => {
+        console.error(`Bookkeeping task generation failed for client ${client.id}:`, err.message);
+      });
+    }
   }
 
   return res.json(ok(

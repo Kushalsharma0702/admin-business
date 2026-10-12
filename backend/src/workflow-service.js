@@ -102,11 +102,15 @@ async function advanceToSubtask(taskId, subtaskName, performedBy) {
     taskStatus = "complete";
   }
 
-  // Update the task itself
+  // Update the task itself. Reminder counters reset on every subtask change —
+  // moving into a new state (e.g. "Query sent to client") should start a
+  // fresh chaser cycle, not inherit however many reminders the previous state
+  // had already sent.
   await db.query(
     `UPDATE tasks
      SET current_subtask=$1, client_progress=$2, admin_status=$1,
          status=$3, ${isTerminal ? "completed_at=NOW()," : ""}
+         reminder_count=0, last_reminder_sent_at=NULL,
          updated_at=NOW()
      WHERE id=$4`,
     [subtaskName, newProgress, taskStatus, taskId]

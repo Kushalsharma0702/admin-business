@@ -104,3 +104,19 @@ app.listen(PORT, () => {
   console.log("  POST http://localhost:3001/api/auth/accept-invite");
   console.log("  GET  http://localhost:3001/api/admin/templates\n");
 });
+
+// Daily chaser-email sweep (bookkeeping data requests, query/HST-approval
+// reminders — see chaser-scheduler.js). PM2 runs this service as a 2-instance
+// cluster; without this guard both workers would register the cron job and
+// every reminder would send twice. PM2 sets NODE_APP_INSTANCE per worker
+// (cluster mode) — only instance 0 schedules it. Falls back to running when
+// unset (e.g. `node src/index.js` directly / `npm run dev`, not under PM2).
+if (process.env.NODE_APP_INSTANCE === undefined || process.env.NODE_APP_INSTANCE === "0") {
+  const cron = require("node-cron");
+  const { runChaserSweep } = require("./chaser-scheduler");
+  // 08:00 UTC daily.
+  cron.schedule("0 8 * * *", () => {
+    runChaserSweep().catch((err) => console.error("Chaser sweep failed:", err.message));
+  });
+  console.log("  Chaser email sweep scheduled — daily at 08:00 UTC\n");
+}

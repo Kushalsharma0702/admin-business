@@ -197,6 +197,79 @@ async function sendTaskChangeNotification({
   return ses.send(cmd);
 }
 
+// Data request / chaser email — sent to the CLIENT asking them to provide the
+// information/documents for a recurring task (bookkeeping, etc). isChaser
+// distinguishes the first request from reminders for subject-line clarity.
+async function sendDataRequestEmail({ toEmail, clientName, taskTitle, taskType, isChaser }) {
+  const heading = isChaser ? "Reminder: We're still waiting on your information" : "We need your information";
+  const htmlBody = `
+    <div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px">
+      <div style="background:#4f46e5;padding:20px 24px;border-radius:8px 8px 0 0">
+        <h1 style="color:#fff;margin:0;font-size:20px">Diamond Accounts Tax</h1>
+      </div>
+      <div style="background:#f8fafc;padding:32px 24px;border-radius:0 0 8px 8px;border:1px solid #e2e8f0;border-top:none">
+        <h2 style="color:#1e293b;margin-top:0">${heading}</h2>
+        <p style="color:#475569">Hi ${clientName || "there"},</p>
+        <p style="color:#475569">
+          ${isChaser
+            ? `This is a reminder that we still need your information for <strong>${taskTitle || taskType}</strong> to continue your bookkeeping.`
+            : `Please provide your information/documents for <strong>${taskTitle || taskType}</strong> so we can proceed with your bookkeeping.`}
+        </p>
+        <p style="color:#475569;font-size:13px">Log in to your client portal to upload what's needed.</p>
+      </div>
+    </div>
+  `;
+  const textBody = `${heading}\n\nHi ${clientName || "there"},\n\n${isChaser
+    ? `This is a reminder that we still need your information for ${taskTitle || taskType}.`
+    : `Please provide your information/documents for ${taskTitle || taskType}.`}`;
+
+  const cmd = new SendEmailCommand({
+    Source: `${env.SES_FROM_NAME} <${env.SES_FROM_EMAIL}>`,
+    Destination: { ToAddresses: [toEmail] },
+    Message: {
+      Subject: { Data: `${isChaser ? "Reminder: " : ""}Information Needed — ${taskTitle || taskType}` },
+      Body: { Html: { Data: htmlBody, Charset: "UTF-8" }, Text: { Data: textBody, Charset: "UTF-8" } },
+    },
+  });
+  return ses.send(cmd);
+}
+
+// Reminder that a query or HST return sent to the client for response/approval
+// is still awaiting their reply.
+async function sendQueryReminderEmail({ toEmail, clientName, taskTitle, taskType, isApproval }) {
+  const subject = isApproval ? `Reminder: HST Return Awaiting Your Approval` : `Reminder: Query Awaiting Your Response`;
+  const htmlBody = `
+    <div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px">
+      <div style="background:#4f46e5;padding:20px 24px;border-radius:8px 8px 0 0">
+        <h1 style="color:#fff;margin:0;font-size:20px">Diamond Accounts Tax</h1>
+      </div>
+      <div style="background:#f8fafc;padding:32px 24px;border-radius:0 0 8px 8px;border:1px solid #e2e8f0;border-top:none">
+        <h2 style="color:#1e293b;margin-top:0">${subject}</h2>
+        <p style="color:#475569">Hi ${clientName || "there"},</p>
+        <p style="color:#475569">
+          ${isApproval
+            ? `We sent your <strong>${taskTitle || taskType}</strong> HST return for approval and haven't heard back yet. Please review and approve at your earliest convenience.`
+            : `We sent you a query regarding <strong>${taskTitle || taskType}</strong> and haven't received a response yet.`}
+        </p>
+        <p style="color:#475569;font-size:13px">Log in to your client portal to respond.</p>
+      </div>
+    </div>
+  `;
+  const textBody = `${subject}\n\nHi ${clientName || "there"},\n\n${isApproval
+    ? `We sent your ${taskTitle || taskType} HST return for approval and haven't heard back yet.`
+    : `We sent you a query regarding ${taskTitle || taskType} and haven't received a response yet.`}`;
+
+  const cmd = new SendEmailCommand({
+    Source: `${env.SES_FROM_NAME} <${env.SES_FROM_EMAIL}>`,
+    Destination: { ToAddresses: [toEmail] },
+    Message: {
+      Subject: { Data: subject },
+      Body: { Html: { Data: htmlBody, Charset: "UTF-8" }, Text: { Data: textBody, Charset: "UTF-8" } },
+    },
+  });
+  return ses.send(cmd);
+}
+
 // ── S3 ────────────────────────────────────────────────────────────────────────
 
 async function getPresignedUploadUrl({ bucket, key, contentType, expiresIn }) {
@@ -238,6 +311,8 @@ module.exports = {
   sendInviteEmail,
   sendClientTakeOnCompletedEmail,
   sendTaskChangeNotification,
+  sendDataRequestEmail,
+  sendQueryReminderEmail,
   getPresignedUploadUrl,
   getDownloadUrl,
   putObject,

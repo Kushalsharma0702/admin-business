@@ -132,10 +132,27 @@ function bookkeepingPeriods(config, today) {
       const open = addMonths(me, -3);
       if (isActive(open, due, today)) out.push(period(`BOOKKEEPING:${ymd(me)}`, y, open, due));
     }
+  } else if (freq === "yearly" || freq === "annual") {
+    // Mirrors hstPeriods' "annual" branch — the client's first bookkeeping
+    // date acts as the year-end anchor, same role salesTaxYearEnd plays for HST.
+    if (config.bookkeepingFirstDate) {
+      const base = parse(config.bookkeepingFirstDate);
+      for (const y of candidateYears(today)) {
+        const ye = safeYearEnd(base, y);
+        const open = addMonths(ye, -2);
+        const due = addMonths(ye, 3);
+        if (isActive(open, due, today)) out.push(period(`BOOKKEEPING:${ymd(ye)}`, y, open, due));
+      }
+    }
   } else if (freq === "weekly") {
+    // Anchored to the client's actual first-bookkeeping-date weekday rather
+    // than a hardcoded Friday, so "generated based on effective date" (the
+    // client's chosen day) is literally true. Falls back to Friday when no
+    // first date was given, preserving the previous behaviour.
+    const anchorDow = config.bookkeepingFirstDate ? parse(config.bookkeepingFirstDate).getUTCDay() : 5;
     for (let i = 0; i < 14; i++) {
       const d = addDays(today, -i);
-      if (d.getUTCDay() === 5) out.push(period(`BOOKKEEPING:${ymd(d)}`, d.getUTCFullYear(), d, addDays(d, 6)));
+      if (d.getUTCDay() === anchorDow) out.push(period(`BOOKKEEPING:${ymd(d)}`, d.getUTCFullYear(), d, addDays(d, 6)));
     }
   }
   return out;
