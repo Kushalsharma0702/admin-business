@@ -19,6 +19,9 @@
 //    responds (admin_status moves off the "sent, awaiting reply" state).
 const db = require("./db");
 const { sendDataRequestEmail, sendQueryReminderEmail } = require("./config/aws");
+const { generateTasksForClient } = require("./task-generation");
+
+const QUARTER_GROUP_BY_MONTH_MOD3 = { 1: "Jan/Apr/Jul/Oct", 2: "Feb/May/Aug/Nov", 0: "Mar/Jun/Sep/Dec" };
 
 const MONTHLY_QUARTERLY_CHASER_DAYS = [3, 5, 7, 9]; // every 2 days, 1st through 10th
 const YEARLY_CHASER_INTERVAL_DAYS = 4;
@@ -167,8 +170,46 @@ async function runQueryAndApprovalReminders(today) {
   }
 }
 
+// ── Keep recurring bookkeeping periods flowing ──────────────────────────────
+// generateTasksForClient is only ever called from two places: a manual admin
+// "Generate Tasks" action, and once when a Client Take-On form is submitted.
+// Neither of those repeats on its own, so without this, a client's monthly/
+// weekly/quarterly/yearly bookkeeping task would only ever get created for
+// the single period active at submission time — next month's period would
+// never appear, and this chaser would have nothing to chase. Re-running it
+// daily for every client with a submitted bookkeeping config is safe: it's
+// idempotent (dedups on periodKey), so it's a no-op for periods that already
+// have a task row.
+async function regenerateBookkeepingTasks() {
+  const { rows } = await db.query(`
+    SELECT client_id, answers
+    FROM client_take_on_submissions
+    WHERE status='submitted' AND answers->>'bookkeeping_period' IS NOT NULL
+  `);
+
+  for (const row of rows) {
+    const answers = row.answers || {};
+    const freq = answers.bookkeeping_period;
+    if (!freq) continue;
+    const config = { bookkeepingFrequency: freq };
+    if (answers.bookkeeping_first_date) {
+      config.bookkeepingFirstDate = answers.bookkeeping_first_date;
+      if (freq === "Quarterly") {
+        const month = Number(String(answers.bookkeeping_first_date).slice(5, 7));
+        config.bookkeepingQuarterOption = QUARTER_GROUP_BY_MONTH_MOD3[month % 3];
+      }
+    }
+    try {
+      await generateTasksForClient(row.client_id, config, null);
+    } catch (err) {
+      console.error(`Bookkeeping task regeneration failed for client ${row.client_id}:`, err.message);
+    }
+  }
+}
+
 async function runChaserSweep() {
   const today = todayUTC();
+  await regenerateBookkeepingTasks();
   await runMonthlyQuarterlyChaser(today);
   await runWeeklyChaser(today);
   await runYearlyChaser(today);
