@@ -114,48 +114,79 @@ function hstPeriods(config, today) {
   return out.concat(installmentPeriods(config, today, "craInstallmentInHST", "taxYearEnd", "HST_INSTALLMENT"));
 }
 
+// How far before a period's end its task appears, from the Bookkeeping form
+// sheet's "Task generated" column: monthly and quarterly "1 month Ago",
+// yearly "3 month Ago". Weekly has no lead — the task is created on the
+// effective date itself ("Instantly task created ... based on effective date").
+const BOOKKEEPING_LEAD_MONTHS = { monthly: 1, quarterly: 1, yearly: 3, annual: 3 };
+
+// `keyDate` identifies the period and must stay stable — it is the dedup key
+// against tasks already in the database. `periodEnd` is only used to decide
+// whether a period falls after the client's first bookkeeping date; for
+// monthly/quarterly/yearly they are the same date, for weekly they differ
+// (keyed on the week's start, ends six days later).
+function bkPeriod(keyDate, open, due, periodEnd = keyDate) {
+  return {
+    ...period(`BOOKKEEPING:${ymd(keyDate)}`, keyDate.getUTCFullYear(), open, due),
+    periodEnd: ymd(periodEnd),
+  };
+}
+
+// One task per period, appearing the day its lead time arrives — not a backlog.
+//
+// The old rule kept every period whose due date was still inside a 120-day
+// grace window, which for a monthly client meant 8 identical tasks created the
+// moment bookkeeping was switched on. Keep only the latest period that has
+// opened; the daily sweep adds the next one on the day it opens. Periods that
+// end before the client's first bookkeeping date were never theirs to do.
+function currentBookkeepingPeriod(periods, today, startDate) {
+  const t = ymd(today);
+  const start = startDate ? ymd(startDate) : null;
+  const opened = periods
+    .filter((p) => p.openDate <= t)
+    .filter((p) => !start || p.periodEnd >= start)
+    .sort((a, b) => (a.openDate < b.openDate ? 1 : -1));
+  return opened.length ? [opened[0]] : [];
+}
+
 function bookkeepingPeriods(config, today) {
   const freq = String(config.bookkeepingFrequency || "").toLowerCase();
-  const out = [];
+  const start = config.bookkeepingFirstDate ? parse(config.bookkeepingFirstDate) : null;
+  const lead = BOOKKEEPING_LEAD_MONTHS[freq] ?? 0;
+  const all = [];
+
   if (freq === "quarterly") {
     const months = QUARTER_MONTHS[String(config.bookkeepingQuarterOption || "").toLowerCase()];
     if (months) for (const y of candidateYears(today)) for (const m of months) {
       const qe = monthEnd(y, m);
-      const due = addMonths(qe, 3);
-      const open = firstOfMonth(addMonths(qe, -3));
-      if (isActive(open, due, today)) out.push(period(`BOOKKEEPING:${ymd(qe)}`, y, open, due));
+      all.push(bkPeriod(qe, addMonths(qe, -lead), addMonths(qe, 3)));
     }
   } else if (freq === "monthly") {
     for (const y of candidateYears(today)) for (let m = 1; m <= 12; m++) {
       const me = monthEnd(y, m);
-      const due = addMonths(me, 1);
-      const open = addMonths(me, -3);
-      if (isActive(open, due, today)) out.push(period(`BOOKKEEPING:${ymd(me)}`, y, open, due));
+      all.push(bkPeriod(me, addMonths(me, -lead), addMonths(me, 1)));
     }
   } else if (freq === "yearly" || freq === "annual") {
-    // Mirrors hstPeriods' "annual" branch — the client's first bookkeeping
-    // date acts as the year-end anchor, same role salesTaxYearEnd plays for HST.
-    if (config.bookkeepingFirstDate) {
-      const base = parse(config.bookkeepingFirstDate);
-      for (const y of candidateYears(today)) {
-        const ye = safeYearEnd(base, y);
-        const open = addMonths(ye, -2);
-        const due = addMonths(ye, 3);
-        if (isActive(open, due, today)) out.push(period(`BOOKKEEPING:${ymd(ye)}`, y, open, due));
-      }
+    // The client's first bookkeeping date acts as the year-end anchor, the same
+    // role salesTaxYearEnd plays for HST.
+    if (!start) return [];
+    for (const y of candidateYears(today)) {
+      const ye = safeYearEnd(start, y);
+      all.push(bkPeriod(ye, addMonths(ye, -lead), addMonths(ye, 3)));
     }
   } else if (freq === "weekly") {
-    // Anchored to the client's actual first-bookkeeping-date weekday rather
-    // than a hardcoded Friday, so "generated based on effective date" (the
-    // client's chosen day) is literally true. Falls back to Friday when no
-    // first date was given, preserving the previous behaviour.
-    const anchorDow = config.bookkeepingFirstDate ? parse(config.bookkeepingFirstDate).getUTCDay() : 5;
-    for (let i = 0; i < 14; i++) {
-      const d = addDays(today, -i);
-      if (d.getUTCDay() === anchorDow) out.push(period(`BOOKKEEPING:${ymd(d)}`, d.getUTCFullYear(), d, addDays(d, 6)));
-    }
+    // Anchored to the weekday of the client's chosen effective date, so
+    // "generated based on effective date" is literally true. Falls back to
+    // Friday when no first date was given.
+    const anchorDow = start ? start.getUTCDay() : 5;
+    let d = new Date(today);
+    while (d.getUTCDay() !== anchorDow) d = addDays(d, -1);
+    all.push(bkPeriod(d, d, addDays(d, 6), addDays(d, 6)));
+  } else {
+    return [];
   }
-  return out;
+
+  return currentBookkeepingPeriod(all, today, start);
 }
 
 // ── public API ────────────────────────────────────────────────────────────────
