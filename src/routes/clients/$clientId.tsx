@@ -1,7 +1,7 @@
 import { createFileRoute, Link, Outlet, useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/app/AppShell";
-import { clientsApi } from "@/lib/api";
+import { clientsApi, clientTakeOnAdminApi } from "@/lib/api";
 import { ClientAvatar } from "@/components/app/ClientAvatar";
 import { Pencil, Loader2, Trash2 } from "lucide-react";
 import { fmtDate } from "@/components/app/utils";
@@ -11,12 +11,19 @@ import { CopyableField } from "@/components/ui/copyable-field";
 
 export const Route = createFileRoute("/clients/$clientId")({ component: ClientLayout });
 
-const tabs = [
+const tabs: [string, string][] = [
   ["home", "Home"], ["client-take-on", "Client Take-On"], ["onboarding", "On-Boarding"], ["general-docs", "General Docs"], ["tasks", "Tasks"],
   ["communication", "Communication"], ["notes", "Notes"], ["files", "Files"],
   ["time-entries", "Time Entries"],
   ["profiles", "Profiles"],
-] as const;
+];
+
+// Service-driven tabs: shown only when that service is switched on in the
+// Client Take-On "Services" section. Insert after Client Take-On, so the
+// detail tab sits next to the sheet that enables it.
+const SERVICE_TABS: { answerKey: string; slug: string; label: string }[] = [
+  { answerKey: "bookkeeping", slug: "bookkeeping", label: "Bookkeeping" },
+];
 
 function ClientLayout() {
   const { clientId } = useParams({ from: "/clients/$clientId" });
@@ -29,6 +36,20 @@ function ClientLayout() {
     queryKey: ["client", clientId],
     queryFn: () => clientsApi.get(clientId),
   });
+
+  // Same query key the Client Take-On tab uses, so toggling Bookkeeping to Yes
+  // there invalidates this and the tab appears without a page reload.
+  const { data: takeOn } = useQuery({
+    queryKey: ["client-take-on", clientId],
+    queryFn: () => clientTakeOnAdminApi.get(clientId),
+  });
+  const answers = (takeOn?.data?.submission?.answers ?? {}) as Record<string, unknown>;
+  const visibleTabs: [string, string][] = [...tabs];
+  for (const st of SERVICE_TABS) {
+    if (answers[st.answerKey] === "Yes") {
+      visibleTabs.splice(2, 0, [st.slug, st.label]);
+    }
+  }
 
   const deleteMutation = useMutation({
     mutationFn: () => clientsApi.delete(clientId),
@@ -69,7 +90,7 @@ function ClientLayout() {
         </div>
       </div>
       <div className="flex gap-5 border-b border-border mb-6 text-sm overflow-x-auto">
-        {tabs.map(([slug, label]) => {
+        {visibleTabs.map(([slug, label]) => {
           const active = path.endsWith(`/${slug}`);
           return (
             <Link key={slug} from="/clients/$clientId" to="/clients/$clientId/$tab" params={{ clientId, tab: slug }} className={`pb-3 border-b-2 whitespace-nowrap ${active ? "border-primary text-foreground font-medium" : "border-transparent text-muted-foreground hover:text-foreground"}`}>

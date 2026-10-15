@@ -13,7 +13,23 @@ const { generateTasksForClient } = require("../task-generation");
 // real task generation instead of just being stored, unused, in answers JSON.
 const QUARTER_GROUP_BY_MONTH_MOD3 = { 1: "Jan/Apr/Jul/Oct", 2: "Feb/May/Aug/Nov", 0: "Mar/Jun/Sep/Dec" };
 
-function bookkeepingConfigFromAnswers(answers) {
+// Back-compat: submissions saved before Bookkeeping became an explicit Yes/No
+// have a bookkeeping_period but no `bookkeeping` answer. Treat those as Yes, so
+// existing clients keep their Bookkeeping tab and keep generating tasks. The
+// value is persisted on their next save.
+function withBookkeepingDefault(answers) {
+  if (answers.bookkeeping == null && answers.bookkeeping_period) {
+    return { ...answers, bookkeeping: "Yes" };
+  }
+  return answers;
+}
+
+function bookkeepingConfigFromAnswers(rawAnswers) {
+  // Bookkeeping must be switched on in Services before any task is generated —
+  // mirrors the spec's "if the Bookkeeping option is selected the bookkeeping
+  // task should generate".
+  const answers = withBookkeepingDefault(rawAnswers);
+  if (answers.bookkeeping !== "Yes") return null;
   const freq = answers.bookkeeping_period;
   if (!freq) return null;
   const config = { bookkeepingFrequency: freq };
@@ -137,15 +153,31 @@ const CLIENT_TAKE_ON_SCHEMA = {
       key: "services",
       title: "Services",
       fields: [
-        { key: "bookkeeping_period", label: "Bookkeeping Period", type: "select", options: ["Weekly", "Monthly", "Quarterly", "Yearly"] },
-        { key: "bookkeeping_first_date", label: "First Bookkeeping Date", type: "date" },
-        { key: "bookkeeping_method", label: "Bookkeeping Method", type: "select", options: ["Paper record", "Spreadsheet", "Desktop", "Online"] },
-        { key: "accounting_software", label: "Accounting Software", type: "select", options: ["Quickbook", "Xero", "Zoho", "VT"] },
+        // Bookkeeping is a yes/no here on purpose. Saying Yes reveals a
+        // dedicated Bookkeeping tab holding the period/date/method/software
+        // detail — those change over a client's life and are edited there,
+        // not buried in the one-off take-on sheet.
+        { key: "bookkeeping", label: "Bookkeeping", type: "select", options: ["Yes", "No"] },
         { key: "payroll_period", label: "Payroll Period", type: "select", options: ["Weekly", "Monthly", "Bi-Weekly", "Four-Weekly", "15th and Last day of Month", "Six-Monthly", "Annual"] },
         { key: "hst_period", label: "HST Period", type: "select", options: ["Monthly", "Quarterly", "Yearly", "Jan/Apr/Jul/Oct", "Feb/May/Aug/Nov", "Mar/Jun/Sept/Dec"] },
         { key: "corporation_tax_period", label: "Corporation Tax Period", type: "select", options: ["Yearly"] },
         { key: "corporation_tax_year_end_date", label: "Corporation Tax Year End Date", type: "date" },
         { key: "services_remarks", label: "Services Remarks", type: "textarea" },
+      ],
+    },
+    {
+      // Rendered on its own "Bookkeeping" tab, not inside the Client Take-On
+      // form. `tab` tells the frontend to skip it in the main form; the tab
+      // only appears at all when services.bookkeeping === "Yes".
+      key: "bookkeeping_details",
+      title: "Bookkeeping",
+      tab: "bookkeeping",
+      showWhen: { field: "bookkeeping", value: "Yes" },
+      fields: [
+        { key: "bookkeeping_period", label: "Bookkeeping Period", type: "select", options: ["Weekly", "Monthly", "Quarterly", "Yearly"] },
+        { key: "bookkeeping_first_date", label: "First Bookkeeping Date", type: "date" },
+        { key: "bookkeeping_method", label: "Bookkeeping Method", type: "select", options: ["Paper record", "Spreadsheet", "Desktop", "Online"] },
+        { key: "accounting_software", label: "Accounting Software", type: "select", options: ["Quickbook", "Xero", "Zoho", "VT"] },
       ],
     },
     {
@@ -205,7 +237,7 @@ async function getSubmission(clientId) {
 
 function serializeSubmission(row) {
   return {
-    answers: row?.answers || {},
+    answers: withBookkeepingDefault(row?.answers || {}),
     status: row?.status || "not_started",
     submittedAt: row?.submitted_at || null,
     updatedAt: row?.updated_at || null,
@@ -239,7 +271,13 @@ adminRouter.put("/clients/:clientId/client-take-on", async (req, res) => {
 
   const answers = sanitizeAnswers(req.body?.answers);
   const submit = req.body?.submit === true;
-  const status = submit ? "submitted" : "draft";
+
+  // A plain save must never drag an already-completed take-on back to "draft" —
+  // the Bookkeeping tab saves through this same endpoint long after the sheet
+  // was completed.
+  const previous = await getSubmission(client.id);
+  const wasSubmitted = previous?.status === "submitted";
+  const status = submit || wasSubmitted ? "submitted" : "draft";
 
   const { rows: [row] } = await db.query(
     `INSERT INTO client_take_on_submissions (client_id, answers, status, submitted_at)
@@ -254,7 +292,8 @@ adminRouter.put("/clients/:clientId/client-take-on", async (req, res) => {
     [client.id, JSON.stringify(answers), status]
   );
 
-  if (submit) {
+  // Notify once, on the transition into completed — not on every later edit.
+  if (submit && !wasSubmitted) {
     sendClientTakeOnCompletedEmail({
       clientName: client.name,
       clientEmail: client.email,
@@ -263,7 +302,12 @@ adminRouter.put("/clients/:clientId/client-take-on", async (req, res) => {
     }).catch((err) => {
       console.error("Client take-on completion email failed:", err.message);
     });
+  }
 
+  // Regenerate on any save of a completed take-on, so changing the frequency or
+  // first date on the Bookkeeping tab actually produces tasks. Generation dedups
+  // on periodKey, so re-running is a no-op for periods that already have one.
+  if (status === "submitted") {
     const bkConfig = bookkeepingConfigFromAnswers(answers);
     if (bkConfig) {
       generateTasksForClient(client.id, bkConfig, req.user.sub).catch((err) => {
@@ -274,7 +318,7 @@ adminRouter.put("/clients/:clientId/client-take-on", async (req, res) => {
 
   return res.json(ok(
     serializeSubmission(row),
-    submit ? "Client take-on submitted" : "Client take-on draft saved"
+    submit ? "Client take-on submitted" : "Saved"
   ));
 });
 

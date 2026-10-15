@@ -445,14 +445,19 @@ router.patch("/tasks/:taskId", async (req, res) => {
   }
 
   const sets = ["updated_at=NOW()"]; const vals = []; let i = 1;
+  // metadata is deliberately NOT listed here — the documentRequirements block
+  // below owns it (it has to merge, not clobber). Listing it in both places
+  // emitted "metadata=$n" twice in one UPDATE, which Postgres rejects.
   const map = {
     adminStatus: "admin_status", title: "title", description: "description",
-    status: "status", metadata: "metadata",
+    status: "status", dueDate: "due_date", openDate: "open_date",
   };
+  const DATE_COLS = new Set(["due_date", "open_date"]);
   for (const [camel, snake] of Object.entries(map)) {
     if (camel in b) {
       sets.push(`${snake}=$${i++}`);
-      vals.push(camel === "metadata" ? JSON.stringify(b[camel]) : b[camel]);
+      // A cleared date input arrives as "" — a date column won't take that.
+      vals.push(DATE_COLS.has(snake) && !b[camel] ? null : b[camel]);
     }
   }
   if ("config" in b) {

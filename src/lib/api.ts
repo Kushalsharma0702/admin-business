@@ -403,7 +403,7 @@ export const tasksApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  update: (taskId: string, body: { adminStatus?: string; title?: string; description?: string; status?: string; config?: Record<string, unknown>; documentRequirements?: { key: string; quantity: number }[]; metadata?: object }) =>
+  update: (taskId: string, body: { adminStatus?: string; title?: string; description?: string | null; status?: string; dueDate?: string | null; openDate?: string | null; config?: Record<string, unknown>; documentRequirements?: { key: string; quantity: number }[]; metadata?: object }) =>
     request<{ success: boolean; data: ApiTaskWithConfig }>(`/api/admin/tasks/${taskId}`, {
       method: "PATCH",
       body: JSON.stringify(body),
@@ -627,6 +627,10 @@ export type OnboardingSection = {
   key: string;
   title: string;
   description?: string;
+  /** When set, this section renders on its own client tab of that slug rather than inline in the form. */
+  tab?: string;
+  /** The answer that has to match for the section's tab to be offered at all. */
+  showWhen?: { field: string; value: string };
   fields: OnboardingField[];
 };
 export type OnboardingSchema = {

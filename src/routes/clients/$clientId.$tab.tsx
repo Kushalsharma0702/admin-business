@@ -66,6 +66,7 @@ function ClientTab() {
     case "general-docs": return <GeneralDocs clientId={clientId} />;
     case "onboarding":   return <OnboardingTab clientId={clientId} />;
     case "client-take-on": return <ClientTakeOnTab clientId={clientId} />;
+    case "bookkeeping":  return <ServiceDetailTab clientId={clientId} tab="bookkeeping" />;
     case "profiles":     return <ProfilesTab clientId={clientId} />;
     default: return <Home clientId={clientId} />;
   }
@@ -401,6 +402,16 @@ function Tasks({ clientId }: { clientId: string }) {
   });
   const [updatingId, setUpdatingId] = useState<string | null>(null);
 
+  // ── Edit-task dialog ──
+  // Holds the task being edited; null when the dialog is closed.
+  const [editing, setEditing] = useState<ApiTask | null>(null);
+  const [editForm, setEditForm] = useState({
+    title: "", adminStatus: "Data not received" as AdminStatus,
+    description: "", openDate: "", dueDate: "",
+  });
+  const [editConfig, setEditConfig] = useState<Record<string, unknown>>({});
+  const [savingEdit, setSavingEdit] = useState(false);
+
   // Task-type config values (e.g. Payroll: nextPayDate, payrollFrequency, WCB…)
   const [config, setConfig] = useState<Record<string, unknown>>({});
   const setConfigValue = (key: string, value: unknown) =>
@@ -457,14 +468,16 @@ function Tasks({ clientId }: { clientId: string }) {
     });
   }, [availableSubtasks.join("||")]);
 
-  // Whether a config field should render given its dependsOn rule
-  const configFieldVisible = (f: ConfigFieldDef): boolean => {
+  // Whether a config field should render given its dependsOn rule.
+  // Takes the config record explicitly so the create and edit dialogs can each
+  // evaluate visibility against their own values.
+  const configFieldVisible = (f: ConfigFieldDef, values: Record<string, unknown>): boolean => {
     // Shared installment fields must work for both T2 and HST flows.
     if (f.key === "taxYearEnd" || f.key === "taxAmount") {
-      return config.craInstallmentInT2 === true || config.craInstallmentInHST === true;
+      return values.craInstallmentInT2 === true || values.craInstallmentInHST === true;
     }
     if (!f.dependsOn) return true;
-    return config[f.dependsOn.field] === f.dependsOn.value;
+    return values[f.dependsOn.field] === f.dependsOn.value;
   };
 
   const handleCreate = async () => {
@@ -472,7 +485,7 @@ function Tasks({ clientId }: { clientId: string }) {
 
     // Validate required config fields (that are currently visible)
     const missing = activeSchema
-      .filter((f) => f.required && configFieldVisible(f))
+      .filter((f) => f.required && configFieldVisible(f, config))
       .filter((f) => { const v = config[f.key]; return v === undefined || v === null || v === ""; });
     if (missing.length) {
       toast.error(`Please fill: ${missing.map((f) => f.label).join(", ")}`);
@@ -487,7 +500,7 @@ function Tasks({ clientId }: { clientId: string }) {
       // Only send config values for fields that belong to (and are visible for) this task type
       const configPayload: Record<string, unknown> = {};
       for (const f of activeSchema) {
-        if (configFieldVisible(f) && config[f.key] !== undefined && config[f.key] !== "") {
+        if (configFieldVisible(f, config) && config[f.key] !== undefined && config[f.key] !== "") {
           configPayload[f.key] = config[f.key];
         }
       }
@@ -530,6 +543,56 @@ function Tasks({ clientId }: { clientId: string }) {
       toast.error(err instanceof Error ? err.message : "Update failed");
     } finally {
       setUpdatingId(null);
+    }
+  };
+
+  // A DATE column round-trips as a full ISO timestamp; <input type="date"> wants YYYY-MM-DD.
+  const toDateInput = (v: string | null) => (v ? String(v).slice(0, 10) : "");
+
+  const startEdit = (t: ApiTask) => {
+    setEditForm({
+      title: t.title ?? "",
+      adminStatus: t.adminStatus as AdminStatus,
+      description: t.description ?? "",
+      openDate: toDateInput(t.openDate),
+      dueDate: toDateInput(t.dueDate),
+    });
+    setEditConfig({ ...(t.config ?? {}) });
+    setEditing(t);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editing) return;
+    if (!editForm.title.trim()) { toast.error("Task title is required"); return; }
+
+    // Only send config keys this task type actually declares and shows, so an
+    // edit can't smuggle in stale fields from a previously selected type.
+    const schema = workflowTypes.find((t) => t.key === editing.taskType)?.configSchema ?? [];
+    const configPayload: Record<string, unknown> = {};
+    for (const f of schema) {
+      if (!configFieldVisible(f, editConfig)) continue;
+      if (editConfig[f.key] !== undefined) configPayload[f.key] = editConfig[f.key];
+    }
+
+    setSavingEdit(true);
+    try {
+      await tasksApi.update(editing.id, {
+        title: editForm.title.trim(),
+        adminStatus: editForm.adminStatus,
+        // null, not undefined — an omitted key would leave a cleared description in place.
+        description: editForm.description.trim() || null,
+        openDate: editForm.openDate || null,
+        dueDate: editForm.dueDate || null,
+        ...(Object.keys(configPayload).length > 0 ? { config: configPayload } : {}),
+      });
+      toast.success("Task updated");
+      setEditing(null);
+      queryClient.invalidateQueries({ queryKey: ["client-tasks", clientId] });
+      queryClient.invalidateQueries({ queryKey: ["admin-tasks"] });
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to update task");
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -604,7 +667,10 @@ function Tasks({ clientId }: { clientId: string }) {
                   </td>
                   <td className="px-4 py-2.5 text-muted-foreground text-xs">{fmtDate(t.createdAt)}</td>
                   <td className="px-4 py-2.5">
-                    <button onClick={() => handleDelete(t.id)} className="text-xs text-destructive hover:underline">Delete</button>
+                    <div className="flex items-center justify-end gap-3">
+                      <button onClick={() => startEdit(t)} className="text-xs text-primary hover:underline">Edit</button>
+                      <button onClick={() => handleDelete(t.id)} className="text-xs text-destructive hover:underline">Delete</button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -720,7 +786,7 @@ function Tasks({ clientId }: { clientId: string }) {
                 <div className="text-xs font-semibold text-foreground uppercase tracking-wide">
                   {workflowTypes.find((t) => t.key === form.taskType)?.displayName} details
                 </div>
-                {activeSchema.filter(configFieldVisible).map((f) => (
+                {activeSchema.filter((f) => configFieldVisible(f, config)).map((f) => (
                   <ConfigFieldInput
                     key={f.key}
                     field={f}
@@ -798,6 +864,76 @@ function Tasks({ clientId }: { clientId: string }) {
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
             <Button onClick={handleCreate}>Assign task</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Edit task dialog ── */}
+      <Dialog open={editing !== null} onOpenChange={(o) => { if (!o) setEditing(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Edit task</DialogTitle></DialogHeader>
+          {editing && (() => {
+            const editSchema = workflowTypes.find((t) => t.key === editing.taskType)?.configSchema ?? [];
+            return (
+              <div className="space-y-3 py-1">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Task title *</label>
+                  <Input value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} className="mt-1" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Task type</label>
+                  {/* Read-only: changing the type would orphan the subtasks already created for this task. */}
+                  <Input value={editing.taskType ?? "—"} disabled className="mt-1" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Admin Status</label>
+                  <select className="mt-1 w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
+                    value={editForm.adminStatus} onChange={(e) => setEditForm({ ...editForm, adminStatus: e.target.value as AdminStatus })}>
+                    {ADMIN_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Description (optional)</label>
+                  <Textarea placeholder="Instructions shown to the client…" value={editForm.description}
+                    onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} rows={3} className="mt-1" />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Open date</label>
+                    <Input type="date" value={editForm.openDate}
+                      onChange={(e) => setEditForm({ ...editForm, openDate: e.target.value })} className="mt-1" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Due date</label>
+                    <Input type="date" value={editForm.dueDate}
+                      onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value })} className="mt-1" />
+                  </div>
+                </div>
+
+                {editSchema.length > 0 && (
+                  <div className="rounded-md border border-border p-3 space-y-3 bg-muted/30">
+                    <div className="text-xs font-semibold text-foreground uppercase tracking-wide">
+                      {workflowTypes.find((t) => t.key === editing.taskType)?.displayName} details
+                    </div>
+                    {editSchema.filter((f) => configFieldVisible(f, editConfig)).map((f) => (
+                      <ConfigFieldInput
+                        key={f.key}
+                        field={f}
+                        value={editConfig[f.key]}
+                        onChange={(v) => setEditConfig((prev) => ({ ...prev, [f.key]: v }))}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditing(null)} disabled={savingEdit}>Cancel</Button>
+            <Button onClick={handleSaveEdit} disabled={savingEdit}>
+              {savingEdit && <Loader2 className="w-4 h-4 mr-1 animate-spin" />}Save changes
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1046,7 +1182,7 @@ function ClientTakeOnTab({ clientId }: { clientId: string }) {
         </div>
       </Card>
 
-      {schema.sections.map((section: OnboardingSection) => (
+      {schema.sections.filter((s: OnboardingSection) => !s.tab).map((section: OnboardingSection) => (
         <Card key={section.key} className="p-5">
           <h4 className="font-semibold mb-3">{section.title}</h4>
           <div className="space-y-3">
@@ -1074,6 +1210,120 @@ function ClientTakeOnTab({ clientId }: { clientId: string }) {
             </Button>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── Service detail tab (e.g. Bookkeeping) ─────────────────────────────────────
+// Renders the Client Take-On section flagged with `tab: "<slug>"`. The answers
+// live in the same client_take_on_submissions.answers blob as the main sheet —
+// these fields were split out because they change over a client's life, and
+// editing them here re-drives task generation.
+function ServiceDetailTab({ clientId, tab }: { clientId: string; tab: string }) {
+  const qc = useQueryClient();
+  const [draft, setDraft] = useState<Record<string, unknown> | null>(null);
+
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ["client-take-on", clientId],
+    queryFn: () => clientTakeOnAdminApi.get(clientId),
+  });
+
+  const saveMutation = useMutation({
+    // The endpoint replaces the whole answers blob, so merge onto the saved
+    // answers rather than sending this tab's fields alone.
+    mutationFn: (values: Record<string, unknown>) =>
+      clientTakeOnAdminApi.save(clientId, {
+        answers: { ...(data?.data.submission.answers ?? {}), ...values },
+        submit: false,
+      }),
+    onSuccess: () => {
+      toast.success("Saved. Tasks will regenerate from the new schedule.");
+      setDraft(null);
+      qc.invalidateQueries({ queryKey: ["client-take-on", clientId] });
+      qc.invalidateQueries({ queryKey: ["client-tasks", clientId] });
+      qc.invalidateQueries({ queryKey: ["admin-tasks"] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  if (isLoading) return (
+    <Card className="p-5"><div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div></Card>
+  );
+  if (isError || !data?.data) return (
+    <Card className="p-5"><div className="flex flex-col items-center gap-3 py-8 text-muted-foreground"><WifiOff className="h-8 w-8" /><p>Could not load these details.</p><Button variant="outline" size="sm" onClick={() => refetch()}>Retry</Button></div></Card>
+  );
+
+  const section = data.data.schema.sections.find((s: OnboardingSection) => s.tab === tab);
+  if (!section) return (
+    <Card className="p-5"><EmptyState icon={FileQuestion} title="Nothing to configure" /></Card>
+  );
+
+  const saved = (data.data.submission.answers ?? {}) as Record<string, unknown>;
+
+  // Reachable by URL after the service is switched back off — say so rather
+  // than silently offering settings that no longer drive anything.
+  if (section.showWhen && saved[section.showWhen.field] !== section.showWhen.value) {
+    return (
+      <Card className="p-5">
+        <EmptyState
+          icon={FileQuestion}
+          title={`${section.title} is switched off`}
+          description={`Set ${section.title} to "Yes" in the Services section of Client Take-On to configure it.`}
+        />
+      </Card>
+    );
+  }
+
+  const values = draft ?? saved;
+  const dirty = draft !== null && section.fields.some((f) => (draft[f.key] ?? "") !== (saved[f.key] ?? ""));
+  const set = (key: string, v: unknown) => setDraft({ ...(draft ?? saved), [key]: v });
+
+  return (
+    <div className="space-y-4">
+      <Card className="p-5">
+        <h3 className="font-semibold">{section.title}</h3>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          Drives automatic {section.title.toLowerCase()} task generation. Changing the frequency or
+          first date here creates tasks for any new periods it opens up.
+        </p>
+      </Card>
+
+      <Card className="p-5">
+        <div className="space-y-3">
+          {section.fields.map((f) => (
+            <div key={f.key} className="grid grid-cols-1 sm:grid-cols-[260px_1fr] gap-1 sm:gap-4 text-sm border-b border-border last:border-0 pb-3 last:pb-0">
+              <label className="text-muted-foreground pt-2">{f.label}{f.required ? " *" : ""}</label>
+              <div>
+                {f.type === "select" ? (
+                  <select
+                    className="w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
+                    value={String(values[f.key] ?? "")}
+                    onChange={(e) => set(f.key, e.target.value)}
+                  >
+                    <option value="">Select…</option>
+                    {(f.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                ) : f.type === "date" ? (
+                  <Input type="date" value={String(values[f.key] ?? "")} onChange={(e) => set(f.key, e.target.value)} />
+                ) : f.type === "textarea" ? (
+                  <Textarea rows={3} value={String(values[f.key] ?? "")} onChange={(e) => set(f.key, e.target.value)} />
+                ) : (
+                  <Input value={String(values[f.key] ?? "")} onChange={(e) => set(f.key, e.target.value)} />
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <div className="flex justify-end gap-2">
+        <Button variant="outline" onClick={() => setDraft(null)} disabled={!dirty || saveMutation.isPending}>
+          Reset
+        </Button>
+        <Button onClick={() => saveMutation.mutate(draft ?? {})} disabled={!dirty || saveMutation.isPending}>
+          {saveMutation.isPending ? <><Loader2 className="h-4 w-4 animate-spin mr-1" />Saving…</> : "Save changes"}
+        </Button>
       </div>
     </div>
   );
