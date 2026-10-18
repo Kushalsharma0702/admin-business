@@ -1536,6 +1536,36 @@ function GeneralDocs({ clientId }: { clientId: string }) {
     onError: (err: Error) => toast.error(err.message),
   });
 
+  const requestReuploadMutation = useMutation({
+    mutationFn: ({ uploadId, reason }: { uploadId: string; reason?: string }) =>
+      generalDocsAdminApi.requestReupload(uploadId, reason),
+    onSuccess: () => {
+      toast.success("Re-upload requested — client notified by email");
+      qc.invalidateQueries({ queryKey: ["client-general-docs", clientId] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const handleView = async (uploadId: string) => {
+    try {
+      const r = await generalDocsAdminApi.getDownloadUrl(uploadId);
+      window.open(r.data.downloadUrl, "_blank", "noopener,noreferrer");
+    } catch { toast.error("Could not load file"); }
+  };
+
+  const handleDownload = async (uploadId: string) => {
+    try {
+      const r = await generalDocsAdminApi.getDownloadUrl(uploadId, true);
+      window.open(r.data.downloadUrl, "_blank", "noopener,noreferrer");
+    } catch { toast.error("Could not download file"); }
+  };
+
+  const handleRequestReupload = (uploadId: string) => {
+    const reason = prompt("Why does the client need to re-send this? (optional — this note is included in the email)");
+    if (reason === null) return; // cancelled
+    requestReuploadMutation.mutate({ uploadId, reason: reason.trim() || undefined });
+  };
+
   const startEdit = () => {
     setDraft({
       enabled: status?.enabled ?? true,
@@ -1627,9 +1657,16 @@ function GeneralDocs({ clientId }: { clientId: string }) {
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                   {field.slots.map((slot) => (
                     <div key={slot.slotIndex} className={`border rounded-md p-2.5 text-xs ${
-                      slot.status === "uploaded" ? "bg-emerald-50 border-emerald-200" : "bg-muted/50 border-dashed"
+                      slot.status === "uploaded" ? "bg-emerald-50 border-emerald-200"
+                        : slot.status === "reupload_requested" ? "bg-amber-50 border-amber-200"
+                        : "bg-muted/50 border-dashed"
                     }`}>
-                      <div className="font-medium mb-1 text-muted-foreground">Slot {slot.slotIndex}</div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-medium text-muted-foreground">Slot {slot.slotIndex}</span>
+                        {slot.status === "reupload_requested" && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">Re-upload requested</span>
+                        )}
+                      </div>
                       {slot.uploadedFile ? (
                         <div className="space-y-1">
                           <p className="truncate font-medium" title={slot.uploadedFile.originalFilename}>
@@ -1638,16 +1675,19 @@ function GeneralDocs({ clientId }: { clientId: string }) {
                           <p className="text-[10px] text-muted-foreground">
                             {new Date(slot.uploadedFile.uploadedAt).toLocaleDateString()}
                           </p>
-                          <div className="flex gap-1 mt-1">
+                          {slot.uploadedFile.reuploadReason && (
+                            <p className="text-[10px] text-amber-700 italic">"{slot.uploadedFile.reuploadReason}"</p>
+                          )}
+                          <div className="flex flex-wrap gap-x-1.5 gap-y-0.5 mt-1">
+                            <button className="text-primary hover:underline text-[10px]" onClick={() => handleView(slot.uploadedFile!.id)}>View</button>
+                            <span className="text-muted-foreground">·</span>
+                            <button className="text-primary hover:underline text-[10px]" onClick={() => handleDownload(slot.uploadedFile!.id)}>Download</button>
+                            <span className="text-muted-foreground">·</span>
                             <button
-                              className="text-primary hover:underline text-[10px]"
-                              onClick={async () => {
-                                try {
-                                  const r = await generalDocsAdminApi.getDownloadUrl(slot.uploadedFile!.id);
-                                  window.open(r.data.downloadUrl, "_blank");
-                                } catch { toast.error("Could not load download URL"); }
-                              }}
-                            >Preview</button>
+                              className="text-amber-700 hover:underline text-[10px] disabled:opacity-50"
+                              disabled={slot.status === "reupload_requested"}
+                              onClick={() => handleRequestReupload(slot.uploadedFile!.id)}
+                            >Re-request</button>
                             <span className="text-muted-foreground">·</span>
                             <button
                               className="text-destructive hover:underline text-[10px]"

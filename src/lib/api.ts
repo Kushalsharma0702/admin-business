@@ -97,8 +97,9 @@ export interface GeneralDocFieldStatus extends GeneralDocField {
     uploadedFile: {
       id: string; fileName: string; originalFilename: string;
       fileType: string | null; fileSize: number; s3Key: string | null; uploadedAt: string;
+      reuploadReason: string | null; reuploadRequestedAt: string | null;
     } | null;
-    status: "uploaded" | "pending";
+    status: "uploaded" | "pending" | "reupload_requested";
   }>;
 }
 
@@ -557,9 +558,14 @@ export const generalDocsAdminApi = {
     ),
   deleteUpload: (uploadId: string) =>
     request<{ success: boolean }>(`/api/admin/general-docs/uploads/${uploadId}`, { method: "DELETE" }),
-  getDownloadUrl: (uploadId: string) =>
+  getDownloadUrl: (uploadId: string, forceDownload = false) =>
     request<{ success: boolean; data: { downloadUrl: string; fileName: string } }>(
-      `/api/admin/general-docs/uploads/${uploadId}/download`
+      `/api/admin/general-docs/uploads/${uploadId}/download${forceDownload ? "?download=1" : ""}`
+    ),
+  requestReupload: (uploadId: string, reason?: string) =>
+    request<{ success: boolean; data: { id: string; status: string; reuploadReason: string | null; reuploadRequestedAt: string | null } }>(
+      `/api/admin/general-docs/uploads/${uploadId}/request-reupload`,
+      { method: "POST", body: JSON.stringify({ reason }) }
     ),
 };
 

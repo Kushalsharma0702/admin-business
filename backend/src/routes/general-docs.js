@@ -4,7 +4,7 @@ const multer  = require("multer");
 const db      = require("../db");
 const { fail, ok } = require("../helpers");
 const { requireAuth } = require("../middleware/auth");
-const { getDownloadUrl, putObject, buildS3Key } = require("../config/aws");
+const { getDownloadUrl, putObject, buildS3Key, sendReuploadRequestEmail } = require("../config/aws");
 const env = require("../config/env");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -56,10 +56,14 @@ function buildDocStatus(config, uploads) {
   if (!config || !config.enabled) return { enabled: false, fields: [], overall: "not_required" };
 
   const fields = (config.fields || []).map((f) => {
-    const fieldUploads = uploads.filter((u) => u.field_key === f.key);
+    // A file flagged reupload_requested still occupies its slot (admin needs to
+    // see what's there) but must NOT count toward completion — that's the whole
+    // point of asking for a replacement.
+    const allFieldUploads = uploads.filter((u) => u.field_key === f.key);
+    const fulfilledUploads = allFieldUploads.filter((u) => u.status === "uploaded");
     const slots = Array.from({ length: f.maxCount }, (_, i) => {
       const slotIdx = i + 1;
-      const upload = fieldUploads.find((u) => u.slot_index === slotIdx) || null;
+      const upload = allFieldUploads.find((u) => u.slot_index === slotIdx) || null;
       return {
         slotIndex:    slotIdx,
         uploadedFile: upload ? {
@@ -70,19 +74,21 @@ function buildDocStatus(config, uploads) {
           fileSize:         Number(upload.file_size),
           s3Key:            upload.s3_key,
           uploadedAt:       upload.uploaded_at,
+          reuploadReason:      upload.reupload_reason || null,
+          reuploadRequestedAt: upload.reupload_requested_at || null,
         } : null,
-        status: upload ? "uploaded" : "pending",
+        status: upload ? upload.status : "pending",
       };
     });
 
     return {
       ...f,
-      uploadedCount: fieldUploads.length,
-      pendingCount:  Math.max(0, f.maxCount - fieldUploads.length),
+      uploadedCount: fulfilledUploads.length,
+      pendingCount:  Math.max(0, f.maxCount - fulfilledUploads.length),
       slots,
       status: f.required
-        ? (fieldUploads.length >= f.maxCount ? "complete" : "pending")
-        : (fieldUploads.length > 0 ? "complete" : "optional"),
+        ? (fulfilledUploads.length >= f.maxCount ? "complete" : "pending")
+        : (fulfilledUploads.length > 0 ? "complete" : "optional"),
     };
   });
 
@@ -183,8 +189,9 @@ adminRouter.delete("/general-docs/uploads/:uploadId", async (req, res) => {
   return res.json(ok({ id: upload.id, deletedAt: new Date().toISOString() }, "Upload deleted"));
 });
 
-// GET /api/admin/general-docs/uploads/:uploadId/download
-// Get a presigned download URL for an admin to preview/download
+// GET /api/admin/general-docs/uploads/:uploadId/download?download=1
+// Presigned URL for an admin to view (inline) or, with ?download=1, force-save
+// the client's uploaded file.
 adminRouter.get("/general-docs/uploads/:uploadId/download", async (req, res) => {
   const { rows: [upload] } = await db.query(
     "SELECT * FROM general_doc_uploads WHERE id=$1",
@@ -194,11 +201,54 @@ adminRouter.get("/general-docs/uploads/:uploadId/download", async (req, res) => 
   if (!upload.s3_key) return res.status(400).json(fail("No S3 file associated with this upload"));
 
   try {
-    const url = await getDownloadUrl({ bucket: upload.s3_bucket || env.S3_BUCKET, key: upload.s3_key });
+    const url = await getDownloadUrl({
+      bucket: upload.s3_bucket || env.S3_BUCKET, key: upload.s3_key,
+      forceDownload: req.query.download === "1", fileName: upload.original_filename,
+    });
     return res.json(ok({ downloadUrl: url, fileName: upload.original_filename }, "Download URL generated"));
   } catch {
     return res.status(500).json(fail("Could not generate download URL"));
   }
+});
+
+// POST /api/admin/general-docs/uploads/:uploadId/request-reupload — { reason? }
+// Flags the file as needing to be re-sent: it stays visible to admin (View/
+// Download still work), stops counting toward completion for the client, and
+// emails the client what to re-send and why.
+adminRouter.post("/general-docs/uploads/:uploadId/request-reupload", async (req, res) => {
+  const { rows: [upload] } = await db.query(
+    "SELECT * FROM general_doc_uploads WHERE id=$1",
+    [req.params.uploadId]
+  );
+  if (!upload) return res.status(404).json(fail("Upload not found"));
+
+  const reason = (req.body?.reason || "").trim() || null;
+
+  const { rows: [updated] } = await db.query(
+    `UPDATE general_doc_uploads
+     SET status='reupload_requested', reupload_reason=$1, reupload_requested_at=NOW(), reupload_requested_by=$2
+     WHERE id=$3 RETURNING *`,
+    [reason, req.user.sub, upload.id]
+  );
+
+  const [{ rows: [client] }, config] = await Promise.all([
+    db.query("SELECT name, email FROM users WHERE id=$1", [upload.client_id]),
+    getConfigForClient(upload.client_id),
+  ]);
+  const fieldName = (config?.fields || []).find((f) => f.key === upload.field_key)?.name || upload.field_key;
+
+  if (client?.email) {
+    sendReuploadRequestEmail({ toEmail: client.email, clientName: client.name, fieldName, reason }).catch((err) => {
+      console.error(`Re-upload request email failed for upload ${upload.id}:`, err.message);
+    });
+  }
+
+  return res.json(ok({
+    id:                  updated.id,
+    status:              updated.status,
+    reuploadReason:      updated.reupload_reason,
+    reuploadRequestedAt: updated.reupload_requested_at,
+  }, "Re-upload requested"));
 });
 
 // ── Client Router ─────────────────────────────────────────────────────────────

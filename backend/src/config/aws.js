@@ -234,6 +234,39 @@ async function sendDataRequestEmail({ toEmail, clientName, taskTitle, taskType, 
   return ses.send(cmd);
 }
 
+// Admin flagged a General Documentation upload as needing to be re-sent
+// (wrong document, unreadable scan, etc.) — tells the client which document
+// and, if given, why.
+async function sendReuploadRequestEmail({ toEmail, clientName, fieldName, reason }) {
+  const htmlBody = `
+    <div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px">
+      <div style="background:#4f46e5;padding:20px 24px;border-radius:8px 8px 0 0">
+        <h1 style="color:#fff;margin:0;font-size:20px">Diamond Accounts Tax</h1>
+      </div>
+      <div style="background:#f8fafc;padding:32px 24px;border-radius:0 0 8px 8px;border:1px solid #e2e8f0;border-top:none">
+        <h2 style="color:#1e293b;margin-top:0">Please re-send a document</h2>
+        <p style="color:#475569">Hi ${clientName || "there"},</p>
+        <p style="color:#475569">
+          We need you to upload <strong>${fieldName}</strong> again — the copy we have isn't usable.
+        </p>
+        ${reason ? `<p style="color:#475569"><strong>Note from our team:</strong> ${reason}</p>` : ""}
+        <p style="color:#475569;font-size:13px">Log in to your client portal to upload the replacement.</p>
+      </div>
+    </div>
+  `;
+  const textBody = `Please re-send a document\n\nHi ${clientName || "there"},\n\nWe need you to upload ${fieldName} again — the copy we have isn't usable.${reason ? `\n\nNote from our team: ${reason}` : ""}`;
+
+  const cmd = new SendEmailCommand({
+    Source: `${env.SES_FROM_NAME} <${env.SES_FROM_EMAIL}>`,
+    Destination: { ToAddresses: [toEmail] },
+    Message: {
+      Subject: { Data: `Action needed — please re-send ${fieldName}` },
+      Body: { Html: { Data: htmlBody, Charset: "UTF-8" }, Text: { Data: textBody, Charset: "UTF-8" } },
+    },
+  });
+  return ses.send(cmd);
+}
+
 // Reminder that a query or HST return sent to the client for response/approval
 // is still awaiting their reply.
 async function sendQueryReminderEmail({ toEmail, clientName, taskTitle, taskType, isApproval }) {
@@ -290,8 +323,15 @@ function buildS3Key({ clientId, taskId, fieldId, fileName }) {
   return parts.join("/");
 }
 
-async function getDownloadUrl({ bucket, key, expiresIn = 3600 }) {
-  const cmd = new GetObjectCommand({ Bucket: bucket || env.S3_BUCKET, Key: key });
+async function getDownloadUrl({ bucket, key, expiresIn = 3600, forceDownload = false, fileName }) {
+  const cmd = new GetObjectCommand({
+    Bucket: bucket || env.S3_BUCKET,
+    Key: key,
+    // "View" wants the browser to render inline (PDFs/images); "Download" wants
+    // a Save-As prompt regardless of type — S3 honours this per-request via
+    // ResponseContentDisposition, no change to the stored object needed.
+    ...(forceDownload ? { ResponseContentDisposition: `attachment; filename="${(fileName || "file").replace(/"/g, "")}"` } : {}),
+  });
   return getSignedUrl(s3, cmd, { expiresIn });
 }
 
@@ -312,6 +352,7 @@ module.exports = {
   sendClientTakeOnCompletedEmail,
   sendTaskChangeNotification,
   sendDataRequestEmail,
+  sendReuploadRequestEmail,
   sendQueryReminderEmail,
   getPresignedUploadUrl,
   getDownloadUrl,
