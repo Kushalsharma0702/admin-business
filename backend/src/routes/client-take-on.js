@@ -322,4 +322,4 @@ adminRouter.put("/clients/:clientId/client-take-on", async (req, res) => {
   ));
 });
 
-module.exports = { adminRouter, CLIENT_TAKE_ON_SCHEMA };
+module.exports = { adminRouter, CLIENT_TAKE_ON_SCHEMA, bookkeepingConfigFromAnswers };

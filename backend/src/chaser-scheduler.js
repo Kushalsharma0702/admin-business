@@ -20,8 +20,7 @@
 const db = require("./db");
 const { sendDataRequestEmail, sendQueryReminderEmail } = require("./config/aws");
 const { generateTasksForClient } = require("./task-generation");
-
-const QUARTER_GROUP_BY_MONTH_MOD3 = { 1: "Jan/Apr/Jul/Oct", 2: "Feb/May/Aug/Nov", 0: "Mar/Jun/Sep/Dec" };
+const { bookkeepingConfigFromAnswers } = require("./routes/client-take-on");
 
 const MONTHLY_QUARTERLY_CHASER_DAYS = [3, 5, 7, 9]; // every 2 days, 1st through 10th
 const YEARLY_CHASER_INTERVAL_DAYS = 4;
@@ -188,17 +187,12 @@ async function regenerateBookkeepingTasks() {
   `);
 
   for (const row of rows) {
-    const answers = row.answers || {};
-    const freq = answers.bookkeeping_period;
-    if (!freq) continue;
-    const config = { bookkeepingFrequency: freq };
-    if (answers.bookkeeping_first_date) {
-      config.bookkeepingFirstDate = answers.bookkeeping_first_date;
-      if (freq === "Quarterly") {
-        const month = Number(String(answers.bookkeeping_first_date).slice(5, 7));
-        config.bookkeepingQuarterOption = QUARTER_GROUP_BY_MONTH_MOD3[month % 3];
-      }
-    }
+    // Shares bookkeepingConfigFromAnswers with the take-on PUT handler so this
+    // sweep honours the Bookkeeping Yes/No toggle the same way a save does —
+    // a reimplementation here previously skipped that check entirely, so
+    // switching Bookkeeping back to No didn't stop the daily regeneration.
+    const config = bookkeepingConfigFromAnswers(row.answers || {});
+    if (!config) continue;
     try {
       await generateTasksForClient(row.client_id, config, null);
     } catch (err) {
