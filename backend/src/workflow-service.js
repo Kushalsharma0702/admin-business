@@ -2,6 +2,18 @@
 const db = require("./db");
 const { getWorkflow, getClientProgress, isValidSubtask, isTerminalSubtask } = require("./workflows");
 
+// General-purpose activity_log writer. advanceToSubtask below has its own
+// inline INSERT (it needs the subtask/progress columns too); this is for
+// every other action worth recording against a task — creation, edits —
+// so the task-detail "All activity" feed reflects more than subtask moves.
+async function logActivity(taskId, action, performedBy, notes = null) {
+  await db.query(
+    `INSERT INTO task_activity_log (task_id, action, performed_by, notes)
+     VALUES ($1, $2, $3, $4)`,
+    [taskId, action, performedBy || null, notes]
+  );
+}
+
 // ── Create subtask rows for a new task ────────────────────────────────────────
 // Called when a task is created with a known task_type.
 async function initializeSubtasks(taskId, taskType, selectedSubtasks = null) {
@@ -182,4 +194,5 @@ module.exports = {
   advanceToSubtask,
   getSubtasks,
   getActivityLog,
+  logActivity,
 };

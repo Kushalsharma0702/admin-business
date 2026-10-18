@@ -1,7 +1,7 @@
 import { createFileRoute, useParams, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore, uid } from "@/store/useAppStore";
-import { clientsApi, tasksApi, metaApi, generalDocsAdminApi, profilesAdminApi, onboardingAdminApi, clientTakeOnAdminApi, notesAdminApi, ADMIN_STATUSES, type ApiTask, type AdminStatus, type TaskTypeInfo, type GeneralDocField, type GeneralDocStatus, type UserProfile, type OnboardingSection, type OnboardingField, type ConfigFieldDef, type ClientNote } from "@/lib/api";
+import { clientsApi, tasksApi, metaApi, generalDocsAdminApi, profilesAdminApi, onboardingAdminApi, clientTakeOnAdminApi, notesAdminApi, taskDetailApi, ADMIN_STATUSES, type ApiTask, type AdminStatus, type TaskTypeInfo, type GeneralDocField, type GeneralDocStatus, type UserProfile, type OnboardingSection, type OnboardingField, type ConfigFieldDef, type ClientNote, type TaskComment, type TaskAttachment } from "@/lib/api";
 import { GeneralDocsConfig } from "@/components/app/GeneralDocsConfig";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/app/EmptyState";
 import { fmtDate, fmtMoney } from "@/components/app/utils";
-import { Upload, FileText, StickyNote, FileQuestion, FilePlus, Clock, Send, Plus, Loader2, WifiOff, Copy, Check, ImagePlus, ImageIcon, X } from "lucide-react";
+import { Upload, FileText, StickyNote, FileQuestion, FilePlus, Clock, Send, Plus, Loader2, WifiOff, Copy, Check, ImagePlus, ImageIcon, X, Paperclip, Download, Trash2, MessageSquare, History } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -308,6 +308,12 @@ function Files({ clientId }: { clientId: string }) {
   );
 }
 
+function fmtFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 /** Renders one task-type config field with the correct input for its declared type. */
 function ConfigFieldInput({
   field, value, onChange,
@@ -411,6 +417,10 @@ function Tasks({ clientId }: { clientId: string }) {
   });
   const [editConfig, setEditConfig] = useState<Record<string, unknown>>({});
   const [savingEdit, setSavingEdit] = useState(false);
+
+  // ── Task-detail panel: Comments / Activity sub-tab, new-comment draft ──
+  const [detailTab, setDetailTab] = useState<"comments" | "activity">("comments");
+  const [newComment, setNewComment] = useState("");
 
   // Task-type config values (e.g. Payroll: nextPayDate, payrollFrequency, WCB…)
   const [config, setConfig] = useState<Record<string, unknown>>({});
@@ -558,6 +568,8 @@ function Tasks({ clientId }: { clientId: string }) {
       dueDate: toDateInput(t.dueDate),
     });
     setEditConfig({ ...(t.config ?? {}) });
+    setDetailTab("comments");
+    setNewComment("");
     setEditing(t);
   };
 
@@ -593,6 +605,47 @@ function Tasks({ clientId }: { clientId: string }) {
       toast.error(err instanceof Error ? err.message : "Failed to update task");
     } finally {
       setSavingEdit(false);
+    }
+  };
+
+  // ── Task-detail panel data: comments, attachments, activity ──
+  const { data: detailData, isLoading: detailLoading } = useQuery({
+    queryKey: ["task-detail", editing?.id],
+    queryFn: () => taskDetailApi.get(editing!.id),
+    enabled: editing !== null,
+  });
+  const detail = detailData?.data;
+
+  const addCommentMutation = useMutation({
+    mutationFn: (text: string) => taskDetailApi.addComment(editing!.id, text),
+    onSuccess: () => {
+      setNewComment("");
+      queryClient.invalidateQueries({ queryKey: ["task-detail", editing?.id] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const uploadAttachmentsMutation = useMutation({
+    mutationFn: (files: File[]) => taskDetailApi.uploadAttachments(editing!.id, files),
+    onSuccess: () => {
+      toast.success("Attachment(s) added");
+      queryClient.invalidateQueries({ queryKey: ["task-detail", editing?.id] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const deleteAttachmentMutation = useMutation({
+    mutationFn: (attachmentId: string) => taskDetailApi.deleteAttachment(attachmentId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["task-detail", editing?.id] }),
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const handleDownloadAttachment = async (attachmentId: string) => {
+    try {
+      const res = await taskDetailApi.getAttachmentDownloadUrl(attachmentId);
+      window.open(res.data.downloadUrl, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not open attachment");
     }
   };
 
@@ -648,13 +701,14 @@ function Tasks({ clientId }: { clientId: string }) {
             </thead>
             <tbody>
               {active.map((t) => (
-                <tr key={t.id} className="border-b border-border last:border-0">
+                <tr key={t.id} onClick={() => startEdit(t)}
+                  className="border-b border-border last:border-0 hover:bg-muted/40 cursor-pointer">
                   <td className="px-4 py-2.5 font-medium">{t.title}</td>
                   <td className="px-4 py-2.5 text-muted-foreground text-xs">{t.taskType ?? "—"}</td>
                   <td className="px-4 py-2.5">
                     <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-medium">Pending</span>
                   </td>
-                  <td className="px-4 py-2.5">
+                  <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                     <select
                       value={t.adminStatus}
                       disabled={updatingId === t.id}
@@ -666,7 +720,7 @@ function Tasks({ clientId }: { clientId: string }) {
                     {updatingId === t.id && <Loader2 className="inline w-3 h-3 animate-spin ml-1 text-muted-foreground" />}
                   </td>
                   <td className="px-4 py-2.5 text-muted-foreground text-xs">{fmtDate(t.createdAt)}</td>
-                  <td className="px-4 py-2.5">
+                  <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-3">
                       <button onClick={() => startEdit(t)} className="text-xs text-primary hover:underline">Edit</button>
                       <button onClick={() => handleDelete(t.id)} className="text-xs text-destructive hover:underline">Delete</button>
@@ -694,10 +748,11 @@ function Tasks({ clientId }: { clientId: string }) {
             </thead>
             <tbody>
               {done.map((t) => (
-                <tr key={t.id} className="border-b border-border last:border-0">
+                <tr key={t.id} onClick={() => startEdit(t)}
+                  className="border-b border-border last:border-0 hover:bg-muted/40 cursor-pointer">
                   <td className="px-4 py-2.5">{t.title}</td>
                   <td className="px-4 py-2.5 text-muted-foreground text-xs">{t.taskType ?? "—"}</td>
-                  <td className="px-4 py-2.5">
+                  <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                     <select
                       value={t.adminStatus}
                       disabled={updatingId === t.id}
@@ -868,68 +923,188 @@ function Tasks({ clientId }: { clientId: string }) {
         </DialogContent>
       </Dialog>
 
-      {/* ── Edit task dialog ── */}
+      {/* ── Task detail panel: edit fields, attachments, internal comments/activity ── */}
       <Dialog open={editing !== null} onOpenChange={(o) => { if (!o) setEditing(null); }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Edit task</DialogTitle></DialogHeader>
+        <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col p-0 gap-0">
+          <DialogHeader className="px-5 pt-5 pb-3 border-b border-border shrink-0">
+            <DialogTitle>{editing?.title ?? "Task"}</DialogTitle>
+          </DialogHeader>
           {editing && (() => {
             const editSchema = workflowTypes.find((t) => t.key === editing.taskType)?.configSchema ?? [];
             return (
-              <div className="space-y-3 py-1">
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Task title *</label>
-                  <Input value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} className="mt-1" />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Task type</label>
-                  {/* Read-only: changing the type would orphan the subtasks already created for this task. */}
-                  <Input value={editing.taskType ?? "—"} disabled className="mt-1" />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Admin Status</label>
-                  <select className="mt-1 w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
-                    value={editForm.adminStatus} onChange={(e) => setEditForm({ ...editForm, adminStatus: e.target.value as AdminStatus })}>
-                    {ADMIN_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Description (optional)</label>
-                  <Textarea placeholder="Instructions shown to the client…" value={editForm.description}
-                    onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} rows={3} className="mt-1" />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] overflow-hidden flex-1 min-h-0">
+                {/* ── Details (editable) ── */}
+                <div className="space-y-3 p-5 overflow-y-auto border-b lg:border-b-0 lg:border-r border-border">
                   <div>
-                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Open date</label>
-                    <Input type="date" value={editForm.openDate}
-                      onChange={(e) => setEditForm({ ...editForm, openDate: e.target.value })} className="mt-1" />
+                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Task title *</label>
+                    <Input value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} className="mt-1" />
                   </div>
                   <div>
-                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Due date</label>
-                    <Input type="date" value={editForm.dueDate}
-                      onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value })} className="mt-1" />
+                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Task type</label>
+                    {/* Read-only: changing the type would orphan the subtasks already created for this task. */}
+                    <Input value={editing.taskType ?? "—"} disabled className="mt-1" />
                   </div>
-                </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Admin Status</label>
+                    <select className="mt-1 w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
+                      value={editForm.adminStatus} onChange={(e) => setEditForm({ ...editForm, adminStatus: e.target.value as AdminStatus })}>
+                      {ADMIN_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Description (optional)</label>
+                    <Textarea placeholder="Instructions shown to the client…" value={editForm.description}
+                      onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} rows={3} className="mt-1" />
+                  </div>
 
-                {editSchema.length > 0 && (
-                  <div className="rounded-md border border-border p-3 space-y-3 bg-muted/30">
-                    <div className="text-xs font-semibold text-foreground uppercase tracking-wide">
-                      {workflowTypes.find((t) => t.key === editing.taskType)?.displayName} details
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Open date</label>
+                      <Input type="date" value={editForm.openDate}
+                        onChange={(e) => setEditForm({ ...editForm, openDate: e.target.value })} className="mt-1" />
                     </div>
-                    {editSchema.filter((f) => configFieldVisible(f, editConfig)).map((f) => (
-                      <ConfigFieldInput
-                        key={f.key}
-                        field={f}
-                        value={editConfig[f.key]}
-                        onChange={(v) => setEditConfig((prev) => ({ ...prev, [f.key]: v }))}
-                      />
-                    ))}
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Due date</label>
+                      <Input type="date" value={editForm.dueDate}
+                        onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value })} className="mt-1" />
+                    </div>
                   </div>
-                )}
+
+                  {editSchema.length > 0 && (
+                    <div className="rounded-md border border-border p-3 space-y-3 bg-muted/30">
+                      <div className="text-xs font-semibold text-foreground uppercase tracking-wide">
+                        {workflowTypes.find((t) => t.key === editing.taskType)?.displayName} details
+                      </div>
+                      {editSchema.filter((f) => configFieldVisible(f, editConfig)).map((f) => (
+                        <ConfigFieldInput
+                          key={f.key}
+                          field={f}
+                          value={editConfig[f.key]}
+                          onChange={(v) => setEditConfig((prev) => ({ ...prev, [f.key]: v }))}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* ── Attachments + Comments/Activity ── */}
+                <div className="flex flex-col overflow-hidden min-h-0">
+                  <div className="p-4 border-b border-border shrink-0">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Attachments</div>
+                      <label className="inline-flex items-center gap-1 text-xs text-primary hover:underline cursor-pointer">
+                        <Paperclip className="w-3.5 h-3.5" /> Add
+                        <input
+                          type="file"
+                          multiple
+                          className="hidden"
+                          disabled={uploadAttachmentsMutation.isPending}
+                          onChange={(e) => {
+                            const files = Array.from(e.target.files ?? []);
+                            if (files.length) uploadAttachmentsMutation.mutate(files);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                    </div>
+                    {uploadAttachmentsMutation.isPending && (
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="w-3 h-3 animate-spin" /> Uploading…</div>
+                    )}
+                    {detailLoading && <div className="text-xs text-muted-foreground">Loading…</div>}
+                    {!detailLoading && (detail?.attachments.length ?? 0) === 0 && (
+                      <div className="text-xs text-muted-foreground">No attachments yet</div>
+                    )}
+                    <div className="space-y-1.5 max-h-28 overflow-y-auto">
+                      {detail?.attachments.map((a: TaskAttachment) => (
+                        <div key={a.id} className="flex items-center justify-between gap-2 text-xs bg-muted/40 rounded px-2 py-1.5">
+                          <button onClick={() => handleDownloadAttachment(a.id)} className="flex items-center gap-1.5 min-w-0 text-left hover:underline">
+                            <FileText className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                            <span className="truncate">{a.originalFilename}</span>
+                          </button>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-muted-foreground">{fmtFileSize(a.fileSize)}</span>
+                            <button onClick={() => deleteAttachmentMutation.mutate(a.id)} className="text-muted-foreground hover:text-destructive">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex border-b border-border shrink-0">
+                    <button
+                      onClick={() => setDetailTab("comments")}
+                      className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-medium py-2 border-b-2 ${detailTab === "comments" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" /> Comments
+                    </button>
+                    <button
+                      onClick={() => setDetailTab("activity")}
+                      className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-medium py-2 border-b-2 ${detailTab === "activity" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                    >
+                      <History className="w-3.5 h-3.5" /> All activity
+                    </button>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+                    {detailLoading && <div className="text-xs text-muted-foreground">Loading…</div>}
+
+                    {!detailLoading && detailTab === "comments" && (
+                      (detail?.comments.length ?? 0) === 0
+                        ? <div className="text-xs text-muted-foreground">No comments yet — internal only, never shown to the client.</div>
+                        : detail!.comments.map((c: TaskComment) => (
+                          <div key={c.id} className="text-sm">
+                            <div className="flex items-baseline gap-2 mb-0.5">
+                              <span className="font-medium text-xs">{c.authorName ?? "Admin"}</span>
+                              <span className="text-[11px] text-muted-foreground">{fmtDate(c.createdAt)}</span>
+                            </div>
+                            <div className="whitespace-pre-wrap text-muted-foreground">{c.text}</div>
+                          </div>
+                        ))
+                    )}
+
+                    {!detailLoading && detailTab === "activity" && (
+                      (detail?.activity.length ?? 0) === 0
+                        ? <div className="text-xs text-muted-foreground">No activity recorded yet.</div>
+                        : detail!.activity.map((a) => (
+                          <div key={a.id} className="text-xs">
+                            <div className="flex items-baseline gap-2">
+                              <span className="font-medium">{a.performedByName ?? "System"}</span>
+                              <span className="text-muted-foreground">{fmtDate(a.createdAt)}</span>
+                            </div>
+                            <div className="text-muted-foreground mt-0.5">{a.notes || a.action}</div>
+                          </div>
+                        ))
+                    )}
+                  </div>
+
+                  {detailTab === "comments" && (
+                    <div className="p-3 border-t border-border shrink-0">
+                      <Textarea
+                        placeholder="Add a comment — internal, never shown to the client…"
+                        value={newComment}
+                        onChange={(e) => setNewComment(e.target.value)}
+                        rows={2}
+                        className="text-sm mb-2"
+                      />
+                      <div className="flex justify-end">
+                        <Button
+                          size="sm"
+                          disabled={!newComment.trim() || addCommentMutation.isPending}
+                          onClick={() => addCommentMutation.mutate(newComment.trim())}
+                        >
+                          {addCommentMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Send className="w-3.5 h-3.5 mr-1" />}
+                          Comment
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             );
           })()}
-          <DialogFooter>
+          <DialogFooter className="px-5 py-3 border-t border-border shrink-0">
             <Button variant="outline" onClick={() => setEditing(null)} disabled={savingEdit}>Cancel</Button>
             <Button onClick={handleSaveEdit} disabled={savingEdit}>
               {savingEdit && <Loader2 className="w-4 h-4 mr-1 animate-spin" />}Save changes

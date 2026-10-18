@@ -609,6 +609,65 @@ export const notesAdminApi = {
     ),
 };
 
+// ─── Admin — Task Detail (comments, attachments, activity) ──────────────────
+export type TaskComment = {
+  id: string;
+  text: string;
+  authorName: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+export type TaskAttachment = {
+  id: string;
+  originalFilename: string;
+  fileType: string | null;
+  fileSize: number;
+  uploadedByName: string | null;
+  uploadedAt: string;
+};
+export type TaskActivityEntry = {
+  id: string;
+  action: string;
+  fromSubtask: string | null;
+  toSubtask: string | null;
+  fromProgress: string | null;
+  toProgress: string | null;
+  performedBy: string | null;
+  performedByName: string | null;
+  notes: string | null;
+  createdAt: string;
+};
+export type TaskDetail = {
+  taskId: string;
+  comments: TaskComment[];
+  attachments: TaskAttachment[];
+  activity: TaskActivityEntry[];
+};
+
+export const taskDetailApi = {
+  get: (taskId: string) =>
+    request<{ success: boolean; data: TaskDetail }>(`/api/admin/tasks/${taskId}/detail`),
+  addComment: (taskId: string, text: string) =>
+    request<{ success: boolean; data: TaskComment }>(`/api/admin/tasks/${taskId}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
+  uploadAttachments: (taskId: string, files: File[]) => {
+    const form = new FormData();
+    files.forEach((f) => form.append("files", f));
+    return request<{ success: boolean; data: TaskAttachment[] }>(
+      `/api/admin/tasks/${taskId}/attachments`,
+      { method: "POST", body: form }
+    );
+  },
+  deleteAttachment: (attachmentId: string) =>
+    request<{ success: boolean }>(`/api/admin/attachments/${attachmentId}`, { method: "DELETE" }),
+  getAttachmentDownloadUrl: (attachmentId: string) =>
+    request<{ success: boolean; data: { downloadUrl: string; fileName: string } }>(
+      `/api/admin/attachments/${attachmentId}/download`
+    ),
+};
+
 // ─── Admin — On-Boarding Details ─────────────────────────────────────────────
 export type OnboardingField = {
   key: string;

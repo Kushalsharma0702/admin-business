@@ -60,6 +60,9 @@ app.use("/api/admin",                 adminClientTakeOn);
 const { adminRouter: adminClientNotes } = require("./routes/client-notes");
 app.use("/api/admin",                 adminClientNotes);
 
+const { adminRouter: adminTaskComments } = require("./routes/task-comments");
+app.use("/api/admin",                 adminTaskComments);
+
 // Superadmin: staff account management, permissions, audit log
 app.use("/api/admin",                 require("./routes/admin-users"));
 

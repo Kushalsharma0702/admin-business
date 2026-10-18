@@ -6,7 +6,7 @@ const { requireAuth } = require("../middleware/auth");
 const { sendInviteEmail } = require("../config/aws");
 const env = require("../config/env");
 const { TASK_TYPES, WORKFLOWS, getWorkflow, getAllClientProgressValues } = require("../workflows");
-const { initializeSubtasks, advanceToSubtask, getSubtasks, getActivityLog } = require("../workflow-service");
+const { initializeSubtasks, advanceToSubtask, getSubtasks, getActivityLog, logActivity } = require("../workflow-service");
 const { enrichTaskWithConfig, mergeConfigUpdate, getConfigSchemaForTaskType } = require("../config-fields");
 const { DOCUMENT_CATALOG, normalizeDocumentRequirements } = require("../document-requirements");
 const schedule = require("../schedule");
@@ -401,6 +401,8 @@ router.post("/clients/:clientId/tasks", async (req, res) => {
     ]
   );
 
+  await logActivity(task.id, "task_created", req.user.sub, `Created "${title}"`);
+
   // If this is a workflow task type, create subtask rows and set initial state
   if (wf) {
     await initializeSubtasks(task.id, taskType, selectedSubtasks.length ? selectedSubtasks : null);
@@ -480,6 +482,20 @@ router.patch("/tasks/:taskId", async (req, res) => {
     `UPDATE tasks SET ${sets.join(",")} WHERE id=$${i} RETURNING *`,
     vals
   );
+
+  // Human-readable diff for the "All activity" feed — only the fields a
+  // reader would care about, not raw config/metadata JSON.
+  const changes = [];
+  if ("adminStatus" in b && b.adminStatus !== existing.admin_status) changes.push(`status: "${existing.admin_status}" → "${b.adminStatus}"`);
+  if ("title" in b && b.title !== existing.title) changes.push(`title: "${existing.title}" → "${b.title}"`);
+  if ("dueDate" in b && (b.dueDate || null) !== existing.due_date) changes.push(`due date → ${b.dueDate || "(cleared)"}`);
+  if ("openDate" in b && (b.openDate || null) !== existing.open_date) changes.push(`open date → ${b.openDate || "(cleared)"}`);
+  if ("description" in b && b.description !== existing.description) changes.push("description updated");
+  if ("config" in b) changes.push("details updated");
+  if (changes.length) {
+    await logActivity(updated.id, "task_edited", req.user.sub, changes.join("; "));
+  }
+
   return res.json(ok({
     ...formatTask(updated),
     ...enrichTaskWithConfig(updated, safeJson(updated.config, {})),
