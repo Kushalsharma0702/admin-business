@@ -23,6 +23,7 @@ const tabs: [string, string][] = [
 // detail tab sits next to the sheet that enables it.
 const SERVICE_TABS: { answerKey: string; slug: string; label: string }[] = [
   { answerKey: "bookkeeping", slug: "bookkeeping", label: "Bookkeeping" },
+  { answerKey: "hst", slug: "hst", label: "HST" },
 ];
 
 function ClientLayout() {
@@ -44,12 +45,10 @@ function ClientLayout() {
     queryFn: () => clientTakeOnAdminApi.get(clientId),
   });
   const answers = (takeOn?.data?.submission?.answers ?? {}) as Record<string, unknown>;
-  const visibleTabs: [string, string][] = [...tabs];
-  for (const st of SERVICE_TABS) {
-    if (answers[st.answerKey] === "Yes") {
-      visibleTabs.splice(2, 0, [st.slug, st.label]);
-    }
-  }
+  const activeServiceTabs: [string, string][] = SERVICE_TABS
+    .filter((st) => answers[st.answerKey] === "Yes")
+    .map((st) => [st.slug, st.label]);
+  const visibleTabs: [string, string][] = [...tabs.slice(0, 2), ...activeServiceTabs, ...tabs.slice(2)];
 
   const deleteMutation = useMutation({
     mutationFn: () => clientsApi.delete(clientId),

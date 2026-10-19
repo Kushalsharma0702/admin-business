@@ -8,6 +8,8 @@ const express = require("express");
 const db = require("../db");
 const { fail, ok } = require("../helpers");
 const { requireAuth } = require("../middleware/auth");
+const { sendOnboardingCompletedEmail } = require("../config/aws");
+const { resolveNotificationEmails } = require("../notification-routing");
 
 // ── Canonical T2 On-Boarding schema ───────────────────────────────────────────
 // Field types the Flutter renderer understands:
@@ -37,6 +39,18 @@ const ONBOARDING_SCHEMA = {
           label: "I will provide the incorporation documents.",
           type: "ack",
           remarkLabel: "Remarks (optional)",
+        },
+        {
+          key: "rotessa_authorization",
+          label:
+            "Step 3: Rotessa – Direct Debit Setup. Please click on the link and fill out this permission " +
+            "form to sign up for monthly retainer payments. We'll automatically debit your account based " +
+            "on your invoice total on 10th of every month. Bank payments are 100% secure, and if you ever " +
+            "need to make a change, we will happily accommodate it.",
+          type: "ack",
+          remarkLabel: "Remarks (optional)",
+          attachmentUrl: "https://app.rotessa.com/authorize/diamondaccounts",
+          attachmentLabel: "Open Rotessa Authorization Form",
         },
       ],
     },
@@ -110,8 +124,13 @@ const ONBOARDING_SCHEMA = {
           placeholder: "e.g. Restaurant – 100%",
         },
         {
-          key: "director_name",
-          label: "Director – Last Name & First Name",
+          key: "director_first_name",
+          label: "Director – First Name",
+          type: "text",
+        },
+        {
+          key: "director_last_name",
+          label: "Director – Last Name",
           type: "text",
         },
         {
@@ -138,12 +157,14 @@ const ONBOARDING_SCHEMA = {
           key: "shareholders",
           label: "Shareholders",
           type: "group",
+          required: true,
           repeatable: true,
           minItems: 1,
           addLabel: "Add shareholder",
           itemLabel: "Share Holder",
           fields: [
-            { key: "name", label: "Name", type: "text", required: true },
+            { key: "first_name", label: "First Name", type: "text", required: true },
+            { key: "last_name", label: "Last Name", type: "text", required: true },
             { key: "sin_bn", label: "SIN / BN", type: "text" },
             { key: "common_pct", label: "% Common Shares", type: "number" },
             { key: "preference_pct", label: "% Preference Shares", type: "number" },
@@ -213,6 +234,7 @@ clientRouter.put("/", async (req, res) => {
   if (submit) {
     // Validate required fields on submit.
     const missing = [];
+    const isBlank = (val) => val === undefined || val === null || String(val).trim() === "";
     for (const section of ONBOARDING_SCHEMA.sections) {
       for (const f of section.fields) {
         if (!f.required) continue;
@@ -220,12 +242,24 @@ clientRouter.put("/", async (req, res) => {
           if (answers[f.key]?.confirmed !== true) missing.push(f.label);
         } else if (f.type === "group") {
           const items = Array.isArray(answers[f.key]) ? answers[f.key] : [];
-          if ((f.minItems || 0) > items.length) missing.push(f.label);
-        } else {
-          const val = answers[f.key];
-          if (val === undefined || val === null || String(val).trim() === "") {
+          if ((f.minItems || 0) > items.length) {
             missing.push(f.label);
+            continue;
           }
+          // minItems only checks the group isn't empty — it doesn't check that
+          // each item's own required fields (e.g. a shareholder's name) were
+          // actually filled in. Previously an item with every field blank
+          // still satisfied "at least 1 shareholder".
+          const requiredSubFields = (f.fields || []).filter((sub) => sub.required);
+          items.forEach((item, idx) => {
+            for (const sub of requiredSubFields) {
+              if (isBlank(item?.[sub.key])) {
+                missing.push(`${f.itemLabel || f.label} ${idx + 1} — ${sub.label}`);
+              }
+            }
+          });
+        } else if (isBlank(answers[f.key])) {
+          missing.push(f.label);
         }
       }
     }
@@ -233,6 +267,11 @@ clientRouter.put("/", async (req, res) => {
       return res.status(400).json(fail(`Please complete: ${missing.join(", ")}`));
     }
   }
+
+  // Only notify on the transition into submitted, not on every later re-save —
+  // same rule as Client Take-On.
+  const previous = await getSubmission(clientId);
+  const wasSubmitted = previous?.status === "submitted";
 
   const status = submit ? "submitted" : "draft";
   const { rows: [row] } = await db.query(
@@ -247,6 +286,20 @@ clientRouter.put("/", async (req, res) => {
      RETURNING *`,
     [clientId, JSON.stringify(answers), status]
   );
+
+  if (submit && !wasSubmitted) {
+    (async () => {
+      const emails = await resolveNotificationEmails("ONBOARDING", [
+        "support@diamondaccounts.ca", "accounts@diamondaccounts.ca", "admin@diamondaccounts.ca",
+      ]);
+      if (!emails.length) return;
+      const { rows: [client] } = await db.query("SELECT name, email FROM users WHERE id=$1", [clientId]);
+      await sendOnboardingCompletedEmail({
+        clientName: client?.name, clientEmail: client?.email,
+        submittedAt: row.submitted_at, toEmails: emails,
+      });
+    })().catch((err) => console.error("Onboarding completion email failed:", err.message));
+  }
 
   return res.json(ok(serializeSubmission(row),
     submit ? "Onboarding submitted" : "Draft saved"));

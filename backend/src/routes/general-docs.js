@@ -36,12 +36,42 @@ function normalizeFields(fields) {
   }));
 }
 
+// Every client gets this field out of the box — the Flutter onboarding
+// screen's "I will provide the incorporation documents" checkbox renders an
+// upload control directly beneath it, but only once a general_doc_configs
+// row with at least one field exists; before this, that row was never
+// created until an admin manually ran "Configure" on the General Docs tab,
+// so the checkbox had nothing to render against for a brand-new client.
+const DEFAULT_GENERAL_DOC_FIELDS = [
+  {
+    key: "incorporation_documents", name: "Incorporation Documents",
+    placeholder: "", required: false, maxCount: 5,
+    acceptedTypes: ACCEPTED_TYPES, notes: "", displayOrder: 1,
+  },
+];
+
 async function getConfigForClient(clientId) {
   const { rows: [cfg] } = await db.query(
     "SELECT * FROM general_doc_configs WHERE client_id=$1",
     [clientId]
   );
-  return cfg || null;
+  if (cfg) return cfg;
+
+  const { rows: [created] } = await db.query(
+    `INSERT INTO general_doc_configs (client_id, enabled, fields)
+     VALUES ($1, true, $2)
+     ON CONFLICT (client_id) DO NOTHING
+     RETURNING *`,
+    [clientId, JSON.stringify(DEFAULT_GENERAL_DOC_FIELDS)]
+  );
+  if (created) return created;
+
+  // Lost a race with a concurrent request that inserted first — read it back.
+  const { rows: [existing] } = await db.query(
+    "SELECT * FROM general_doc_configs WHERE client_id=$1",
+    [clientId]
+  );
+  return existing || null;
 }
 
 async function getUploadsForClient(clientId) {

@@ -16,6 +16,15 @@ const QUARTER_MONTHS = {
   "mar/jun/sep/dec": [3, 6, 9, 12],
 };
 
+// Every dropdown offering this option (client-take-on.js's bookkeeping_period
+// and hst_period fields) spells it "Mar/Jun/Sept/Dec" — "Sept", not "Sep" —
+// which never matched QUARTER_MONTHS's key, so that quarter group silently
+// produced zero periods. Normalize instead of relying on every caller/schema
+// to spell it exactly right.
+function quarterMonths(optionLabel) {
+  return QUARTER_MONTHS[String(optionLabel || "").toLowerCase().replace("sept", "sep")];
+}
+
 // ── date helpers (UTC) ────────────────────────────────────────────────────────
 function ymd(d) { return d.toISOString().slice(0, 10); }
 function parse(s) { const [y, m, dd] = String(s).slice(0, 10).split("-").map(Number); return new Date(Date.UTC(y, m - 1, dd)); }
@@ -84,34 +93,56 @@ function installmentPeriods(config, today, enabledKey, yearEndKey, prefix) {
   return out;
 }
 
+function hstPeriod(keyDate, open, due) {
+  return period(`HST:${ymd(keyDate)}`, keyDate.getUTCFullYear(), open, due);
+}
+
+// A period is current for exactly its own working window: from the day it
+// opens (lead time arrives) through its due date. Unlike bookkeeping's
+// "latest only" rule, this can legitimately keep MORE than one period
+// current at once — HST Monthly's 3-month lead is wider than its 1-month
+// cadence, so e.g. October, November and December are all inside their
+// window simultaneously on any given October day, and all three genuinely
+// are current work, not a backlog. What this still prevents is the original
+// bug: a 120-day grace keeping every period from the last several months
+// "active" long after its own due date had passed.
+function currentHstPeriods(periods, today) {
+  const t = ymd(today);
+  return periods.filter((p) => p.openDate <= t && p.dueDate >= t);
+}
+
 function hstPeriods(config, today) {
   const freq = String(config.salesTaxFrequency || "").toLowerCase();
-  const out = [];
+  const all = [];
   if (freq === "annual" && config.salesTaxYearEnd) {
     const base = parse(config.salesTaxYearEnd);
     for (const y of candidateYears(today)) {
       const ye = safeYearEnd(base, y);
       const open = addMonths(ye, -2);        // month-end, 3 months before
       const due = addMonths(ye, 3);
-      if (isActive(open, due, today)) out.push(period(`HST:${ymd(ye)}`, ye.getUTCFullYear(), open, due));
+      all.push(hstPeriod(ye, open, due));
     }
   } else if (freq === "quarterly") {
-    const months = QUARTER_MONTHS[String(config.hstQuarterOption || "").toLowerCase()];
+    const months = quarterMonths(config.hstQuarterOption);
+    // Due date corrected to +1 month per client-docs/"Task details updated" —
+    // was +3 months, which (combined with the old 120-day grace window below)
+    // is what let several quarters' tasks all appear at once.
     if (months) for (const y of candidateYears(today)) for (const m of months) {
       const qe = monthEnd(y, m);
-      const due = addMonths(qe, 3);
+      const due = addMonths(qe, 1);
       const open = firstOfMonth(addMonths(qe, -3));
-      if (isActive(open, due, today)) out.push(period(`HST:${ymd(qe)}`, y, open, due));
+      all.push(hstPeriod(qe, open, due));
     }
   } else if (freq === "monthly") {
     for (const y of candidateYears(today)) for (let m = 1; m <= 12; m++) {
       const me = monthEnd(y, m);
       const due = addMonths(me, 1);
       const open = addMonths(me, -3);
-      if (isActive(open, due, today)) out.push(period(`HST:${ymd(me)}`, y, open, due));
+      all.push(hstPeriod(me, open, due));
     }
   }
-  return out.concat(installmentPeriods(config, today, "craInstallmentInHST", "taxYearEnd", "HST_INSTALLMENT"));
+  return currentHstPeriods(all, today)
+    .concat(installmentPeriods(config, today, "craInstallmentInHST", "taxYearEnd", "HST_INSTALLMENT"));
 }
 
 // How far before a period's end its task appears, from the Bookkeeping form
@@ -156,7 +187,7 @@ function bookkeepingPeriods(config, today) {
   const all = [];
 
   if (freq === "quarterly") {
-    const months = QUARTER_MONTHS[String(config.bookkeepingQuarterOption || "").toLowerCase()];
+    const months = quarterMonths(config.bookkeepingQuarterOption);
     if (months) for (const y of candidateYears(today)) for (const m of months) {
       const qe = monthEnd(y, m);
       all.push(bkPeriod(qe, addMonths(qe, -lead), addMonths(qe, 3)));

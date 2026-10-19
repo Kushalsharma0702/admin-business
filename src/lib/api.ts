@@ -32,6 +32,10 @@ export const TASK_TYPES = [
   "PD7A", "WCB", "T4", "T4A", "T5018", "T5",
   "CORPORATE_TAX_QUARTERLY_PAYMENT", "HST_QUARTERLY_PAYMENT",
   "CUSTOM",
+  // Not a real `tasks.task_type` — reuses the same notification-routing table
+  // (task_type is just a free string key there) so Onboarding's completion
+  // email is editable from this same Admins page screen.
+  "ONBOARDING",
 ] as const;
 
 export type TaskType = (typeof TASK_TYPES)[number];
@@ -687,6 +691,8 @@ export type OnboardingField = {
   minItems?: number;
   itemLabel?: string;
   fields?: OnboardingField[];
+  /** Shown only when another field in the same section/tab has this value — e.g. hst_quarter_option only when hst_period is "Quarterly". */
+  dependsOn?: { field: string; value: string };
 };
 export type OnboardingSection = {
   key: string;

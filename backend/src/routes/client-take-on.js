@@ -43,6 +43,31 @@ function bookkeepingConfigFromAnswers(rawAnswers) {
   return config;
 }
 
+// Same bridge pattern as bookkeeping, for the hst_details tab. schedule.js's
+// hstPeriods() expects the internal frequency string "annual" (not the UI's
+// "Yearly" label) — that mapping happens here, the one place that matters.
+function hstConfigFromAnswers(answers) {
+  if (answers.hst !== "Yes") return null;
+  const freq = answers.hst_period;
+  if (!freq) return null;
+  const config = { salesTaxFrequency: freq === "Yearly" ? "annual" : freq.toLowerCase() };
+  if (freq === "Yearly" && answers.hst_year_end) config.salesTaxYearEnd = answers.hst_year_end;
+  if (freq === "Quarterly" && answers.hst_quarter_option) config.hstQuarterOption = answers.hst_quarter_option;
+  return config;
+}
+
+// Merges every per-service bridge into one config object for
+// generateTasksForClient, which already knows how to plan several task types
+// from a single merged config (see task-generation.js / schedule.js).
+function recurringConfigFromAnswers(answers) {
+  const config = {};
+  const bk = bookkeepingConfigFromAnswers(answers);
+  if (bk) Object.assign(config, bk);
+  const hst = hstConfigFromAnswers(answers);
+  if (hst) Object.assign(config, hst);
+  return Object.keys(config).length ? config : null;
+}
+
 const CLIENT_TAKE_ON_NOTIFY_EMAIL = process.env.CLIENT_TAKE_ON_NOTIFY_EMAIL || "admin@diamondaccounts.ca";
 
 const CLIENT_TAKE_ON_SCHEMA = {
@@ -159,7 +184,8 @@ const CLIENT_TAKE_ON_SCHEMA = {
         // not buried in the one-off take-on sheet.
         { key: "bookkeeping", label: "Bookkeeping", type: "select", options: ["Yes", "No"] },
         { key: "payroll_period", label: "Payroll Period", type: "select", options: ["Weekly", "Monthly", "Bi-Weekly", "Four-Weekly", "15th and Last day of Month", "Six-Monthly", "Annual"] },
-        { key: "hst_period", label: "HST Period", type: "select", options: ["Monthly", "Quarterly", "Yearly", "Jan/Apr/Jul/Oct", "Feb/May/Aug/Nov", "Mar/Jun/Sept/Dec"] },
+        // HST, same Yes/No-gates-a-tab pattern as Bookkeeping — see hst_details below.
+        { key: "hst", label: "HST", type: "select", options: ["Yes", "No"] },
         { key: "corporation_tax_period", label: "Corporation Tax Period", type: "select", options: ["Yearly"] },
         { key: "corporation_tax_year_end_date", label: "Corporation Tax Year End Date", type: "date" },
         { key: "services_remarks", label: "Services Remarks", type: "textarea" },
@@ -178,6 +204,24 @@ const CLIENT_TAKE_ON_SCHEMA = {
         { key: "bookkeeping_first_date", label: "First Bookkeeping Date", type: "date" },
         { key: "bookkeeping_method", label: "Bookkeeping Method", type: "select", options: ["Paper record", "Spreadsheet", "Desktop", "Online"] },
         { key: "accounting_software", label: "Accounting Software", type: "select", options: ["Quickbook", "Xero", "Zoho", "VT"] },
+      ],
+    },
+    {
+      key: "hst_details",
+      title: "HST",
+      tab: "hst",
+      showWhen: { field: "hst", value: "Yes" },
+      fields: [
+        { key: "hst_period", label: "HST Frequency", type: "select", options: ["Monthly", "Quarterly", "Yearly"] },
+        {
+          key: "hst_quarter_option", label: "Quarter Group", type: "select",
+          options: ["Jan/Apr/Jul/Oct", "Feb/May/Aug/Nov", "Mar/Jun/Sept/Dec"],
+          dependsOn: { field: "hst_period", value: "Quarterly" },
+        },
+        {
+          key: "hst_year_end", label: "Sales Tax Year End", type: "date",
+          dependsOn: { field: "hst_period", value: "Yearly" },
+        },
       ],
     },
     {
@@ -305,13 +349,14 @@ adminRouter.put("/clients/:clientId/client-take-on", async (req, res) => {
   }
 
   // Regenerate on any save of a completed take-on, so changing the frequency or
-  // first date on the Bookkeeping tab actually produces tasks. Generation dedups
-  // on periodKey, so re-running is a no-op for periods that already have one.
+  // first date on the Bookkeeping/HST tab actually produces tasks. Generation
+  // dedups on periodKey, so re-running is a no-op for periods that already
+  // have one.
   if (status === "submitted") {
-    const bkConfig = bookkeepingConfigFromAnswers(answers);
-    if (bkConfig) {
-      generateTasksForClient(client.id, bkConfig, req.user.sub).catch((err) => {
-        console.error(`Bookkeeping task generation failed for client ${client.id}:`, err.message);
+    const recurringConfig = recurringConfigFromAnswers(answers);
+    if (recurringConfig) {
+      generateTasksForClient(client.id, recurringConfig, req.user.sub).catch((err) => {
+        console.error(`Recurring task generation failed for client ${client.id}:`, err.message);
       });
     }
   }
@@ -322,4 +367,4 @@ adminRouter.put("/clients/:clientId/client-take-on", async (req, res) => {
   ));
 });
 
-module.exports = { adminRouter, CLIENT_TAKE_ON_SCHEMA, bookkeepingConfigFromAnswers };
+module.exports = { adminRouter, CLIENT_TAKE_ON_SCHEMA, bookkeepingConfigFromAnswers, hstConfigFromAnswers, recurringConfigFromAnswers };

@@ -67,6 +67,7 @@ function ClientTab() {
     case "onboarding":   return <OnboardingTab clientId={clientId} />;
     case "client-take-on": return <ClientTakeOnTab clientId={clientId} />;
     case "bookkeeping":  return <ServiceDetailTab clientId={clientId} tab="bookkeeping" />;
+    case "hst":          return <ServiceDetailTab clientId={clientId} tab="hst" />;
     case "profiles":     return <ProfilesTab clientId={clientId} />;
     default: return <Home clientId={clientId} />;
   }
@@ -1453,6 +1454,8 @@ function ServiceDetailTab({ clientId, tab }: { clientId: string; tab: string }) 
   const values = draft ?? saved;
   const dirty = draft !== null && section.fields.some((f) => (draft[f.key] ?? "") !== (saved[f.key] ?? ""));
   const set = (key: string, v: unknown) => setDraft({ ...(draft ?? saved), [key]: v });
+  // Field-level conditional — e.g. hst_quarter_option only when hst_period is "Quarterly".
+  const visibleFields = section.fields.filter((f) => !f.dependsOn || values[f.dependsOn.field] === f.dependsOn.value);
 
   return (
     <div className="space-y-4">
@@ -1466,7 +1469,7 @@ function ServiceDetailTab({ clientId, tab }: { clientId: string; tab: string }) 
 
       <Card className="p-5">
         <div className="space-y-3">
-          {section.fields.map((f) => (
+          {visibleFields.map((f) => (
             <div key={f.key} className="grid grid-cols-1 sm:grid-cols-[260px_1fr] gap-1 sm:gap-4 text-sm border-b border-border last:border-0 pb-3 last:pb-0">
               <label className="text-muted-foreground pt-2">{f.label}{f.required ? " *" : ""}</label>
               <div>

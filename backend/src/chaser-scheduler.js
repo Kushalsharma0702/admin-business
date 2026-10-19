@@ -20,7 +20,7 @@
 const db = require("./db");
 const { sendDataRequestEmail, sendQueryReminderEmail } = require("./config/aws");
 const { generateTasksForClient } = require("./task-generation");
-const { bookkeepingConfigFromAnswers } = require("./routes/client-take-on");
+const { recurringConfigFromAnswers } = require("./routes/client-take-on");
 
 const MONTHLY_QUARTERLY_CHASER_DAYS = [3, 5, 7, 9]; // every 2 days, 1st through 10th
 const YEARLY_CHASER_INTERVAL_DAYS = 4;
@@ -179,31 +179,32 @@ async function runQueryAndApprovalReminders(today) {
 // daily for every client with a submitted bookkeeping config is safe: it's
 // idempotent (dedups on periodKey), so it's a no-op for periods that already
 // have a task row.
-async function regenerateBookkeepingTasks() {
+async function regenerateRecurringTasks() {
   const { rows } = await db.query(`
     SELECT client_id, answers
     FROM client_take_on_submissions
-    WHERE status='submitted' AND answers->>'bookkeeping_period' IS NOT NULL
+    WHERE status='submitted'
+      AND (answers->>'bookkeeping_period' IS NOT NULL OR answers->>'hst_period' IS NOT NULL)
   `);
 
   for (const row of rows) {
-    // Shares bookkeepingConfigFromAnswers with the take-on PUT handler so this
-    // sweep honours the Bookkeeping Yes/No toggle the same way a save does —
+    // Shares recurringConfigFromAnswers with the take-on PUT handler so this
+    // sweep honours each service's Yes/No toggle the same way a save does —
     // a reimplementation here previously skipped that check entirely, so
     // switching Bookkeeping back to No didn't stop the daily regeneration.
-    const config = bookkeepingConfigFromAnswers(row.answers || {});
+    const config = recurringConfigFromAnswers(row.answers || {});
     if (!config) continue;
     try {
       await generateTasksForClient(row.client_id, config, null);
     } catch (err) {
-      console.error(`Bookkeeping task regeneration failed for client ${row.client_id}:`, err.message);
+      console.error(`Recurring task regeneration failed for client ${row.client_id}:`, err.message);
     }
   }
 }
 
 async function runChaserSweep() {
   const today = todayUTC();
-  await regenerateBookkeepingTasks();
+  await regenerateRecurringTasks();
   await runMonthlyQuarterlyChaser(today);
   await runWeeklyChaser(today);
   await runYearlyChaser(today);
