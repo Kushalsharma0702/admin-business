@@ -1,32 +1,53 @@
-// chaser-scheduler.js — daily sweep that sends data-request and
-// query/HST-approval reminder emails per the rules below. Runs once a day
-// (wired up in index.js via node-cron); every check below is independent and
-// re-evaluated fresh each tick, so a missed run just catches up next time.
+// chaser-scheduler.js — hourly sweep that sends data-request and
+// query/HST-approval reminder emails per the rules below. Every check is
+// independent and re-evaluated fresh each tick, so a missed run just catches
+// up on the next one.
 //
-// Rules (from the Bookkeeping form spec):
-//  - Monthly/Quarterly bookkeeping: first data-request email on the 1st of
-//    the month, chasers every 2 days until the 10th. Stops once the task's
-//    admin_status moves off "Request Tax return information" (data
-//    received/closed) before the 10th.
-//  - Weekly bookkeeping: one data-request email on the task's effective
-//    (open) date each week — no chaser cadence specified.
-//  - Yearly bookkeeping: first email on the 1st of the month after year-end,
-//    chasers every 4 days for ~1.5 months (45 days). Stops the same way as
-//    monthly/quarterly once data is received/closed.
-//  - Query / HST-approval reminders: sent twice (spaced 3 days apart — not
-//    specified in the spec, chosen to match the other cadences) after a
-//    query/draft is sent to the client. Stops immediately once the client
-//    responds (admin_status moves off the "sent, awaiting reply" state).
+// Send window (send-window.js, Atlantic time):
+//   never Saturday/Sunday, never a Canadian bank holiday, nothing before
+//   09:00, and nothing before 13:00 on a Monday. The sweep runs hourly so the
+//   first eligible tick of a day is the one that sends; a per-task
+//   once-per-day guard keeps that to a single email per task per day.
+//
+// Cadences:
+//  - Monthly/Quarterly bookkeeping: first data-request from the 1st of the
+//    month, chasers every 2 days through the 10th.
+//  - Weekly bookkeeping: one data-request once the task's open date arrives.
+//  - Yearly bookkeeping: first email from the 1st of the month after
+//    year-end, chasers every 5 days for ~1.5 months (45 days).
+//  - Query / HST-approval reminders: twice, 3 days apart, stopping as soon as
+//    the client responds (admin_status moves off the awaiting-reply state).
+//
+// All cadences are measured as "days since the last email actually sent",
+// not "today is day N". That matters now that days get skipped: a chaser due
+// on a Saturday or Canada Day goes out on the next eligible day instead of
+// being silently dropped for that cycle.
 const db = require("./db");
 const { sendDataRequestEmail, sendQueryReminderEmail } = require("./config/aws");
 const { generateTasksForClient } = require("./task-generation");
 const { recurringConfigFromAnswers } = require("./routes/client-take-on");
+const { canSendAt, atlanticDateKey } = require("./send-window");
 
-const MONTHLY_QUARTERLY_CHASER_DAYS = [3, 5, 7, 9]; // every 2 days, 1st through 10th
-const YEARLY_CHASER_INTERVAL_DAYS = 4;
-const YEARLY_CHASER_WINDOW_DAYS = 45; // ~1.5 months
+const MONTHLY_QUARTERLY_INTERVAL_DAYS = 2;
+const MONTHLY_QUARTERLY_LAST_DOM = 10;   // chasers run the 1st through the 10th
+const WEEKLY_CATCHUP_DAYS = 7;           // how long after open_date a missed weekly email may still go
+const YEARLY_CHASER_INTERVAL_DAYS = 5;
+const YEARLY_CHASER_WINDOW_DAYS = 45;    // ~1.5 months
 const QUERY_REMINDER_INTERVAL_DAYS = 3;
 const QUERY_REMINDER_MAX_COUNT = 2;
+
+// The admin statuses that mean "we are still waiting on the client's data".
+// NOTE: these are tasks.admin_status values. The previous implementation
+// filtered on admin_status='Request Tax return information', which is a
+// SUBTASK name (workflows.js), not an admin status — so the query matched
+// zero rows and no bookkeeping chaser email was ever sent.
+const AWAITING_DATA_STATUSES = ["Data not received", "Partial Data received"];
+
+// "Partial Data received" means some documents arrived: the chaser should ask
+// for what is still missing rather than re-request the whole set.
+function isMissingDataChase(adminStatus) {
+  return adminStatus === "Partial Data received";
+}
 
 function todayUTC() {
   const now = new Date();
@@ -41,71 +62,101 @@ async function clientInfo(clientId) {
   return u || {};
 }
 
-// ── Monthly/Quarterly bookkeeping data-request chaser ──────────────────────
-async function runMonthlyQuarterlyChaser(today) {
-  const dom = today.getUTCDate();
-  if (dom !== 1 && !MONTHLY_QUARTERLY_CHASER_DAYS.includes(dom)) return;
+// One email per task per Atlantic day, regardless of how many hourly ticks run.
+function alreadySentToday(task, now) {
+  return !!task.last_reminder_sent_at &&
+    atlanticDateKey(new Date(task.last_reminder_sent_at)) === atlanticDateKey(now);
+}
 
-  const { rows: tasks } = await db.query(`
-    SELECT id, client_id, title, task_type, reminder_count
-    FROM tasks
-    WHERE task_type='BOOKKEEPING'
-      AND admin_status='Request Tax return information'
-      AND config->>'bookkeepingFrequency' IN ('Monthly', 'Quarterly')
-  `);
+function daysSinceLastEmail(task, today) {
+  return task.last_reminder_sent_at
+    ? daysBetween(new Date(task.last_reminder_sent_at), today)
+    : Infinity; // never sent — eligible immediately
+}
 
-  for (const task of tasks) {
-    const isChaser = dom !== 1;
-    const { name, email } = await clientInfo(task.client_id);
-    if (!email) continue;
-    try {
-      await sendDataRequestEmail({ toEmail: email, clientName: name, taskTitle: task.title, taskType: task.task_type, isChaser });
-      await db.query(
-        "UPDATE tasks SET reminder_count=reminder_count+1, last_reminder_sent_at=NOW() WHERE id=$1",
-        [task.id]
-      );
-    } catch (err) {
-      console.error(`Bookkeeping data-request email failed for task ${task.id}:`, err.message);
-    }
+// Sends and records one data-request/chaser email. Returns true if it went out.
+async function sendDataRequest(task, { isChaser, now }) {
+  const { name, email } = await clientInfo(task.client_id);
+  if (!email) return false;
+  try {
+    await sendDataRequestEmail({
+      toEmail: email,
+      clientName: name,
+      taskTitle: task.title,
+      taskType: task.task_type,
+      isChaser,
+      // Switches the copy from "please send your documents" to "we are still
+      // missing the items below" once partial data has arrived.
+      isMissingData: isMissingDataChase(task.admin_status),
+      missingDataNote: task.metadata?.missingDataRequest?.note || null,
+      missingDataPeriod: task.metadata?.missingDataRequest?.period || null,
+    });
+    await db.query(
+      "UPDATE tasks SET reminder_count=reminder_count+1, last_reminder_sent_at=NOW() WHERE id=$1",
+      [task.id]
+    );
+    return true;
+  } catch (err) {
+    console.error(`Data-request email failed for task ${task.id}:`, err.message);
+    return false;
   }
 }
 
-// ── Weekly bookkeeping data-request (single email on effective/open date) ──
-async function runWeeklyChaser(today) {
-  const { rows: tasks } = await db.query(`
-    SELECT id, client_id, title, task_type
-    FROM tasks
-    WHERE task_type='BOOKKEEPING'
-      AND admin_status='Request Tax return information'
-      AND config->>'bookkeepingFrequency' = 'Weekly'
-      AND open_date = $1
-      AND reminder_count = 0
-  `, [today.toISOString().slice(0, 10)]);
+const BOOKKEEPING_AWAITING_SQL = `
+  SELECT id, client_id, title, task_type, admin_status, metadata,
+         open_date, last_reminder_sent_at, reminder_count
+  FROM tasks
+  WHERE task_type='BOOKKEEPING'
+    AND closed_at IS NULL
+    AND admin_status = ANY($1)
+`;
+
+// ── Monthly/Quarterly bookkeeping data-request chaser ──────────────────────
+async function runMonthlyQuarterlyChaser(today, now) {
+  const dom = today.getUTCDate();
+  if (dom > MONTHLY_QUARTERLY_LAST_DOM) return;
+
+  const { rows: tasks } = await db.query(
+    `${BOOKKEEPING_AWAITING_SQL} AND config->>'bookkeepingFrequency' IN ('Monthly','Quarterly')`,
+    [AWAITING_DATA_STATUSES]
+  );
 
   for (const task of tasks) {
-    const { name, email } = await clientInfo(task.client_id);
-    if (!email) continue;
-    try {
-      await sendDataRequestEmail({ toEmail: email, clientName: name, taskTitle: task.title, taskType: task.task_type, isChaser: false });
-      await db.query(
-        "UPDATE tasks SET reminder_count=reminder_count+1, last_reminder_sent_at=NOW() WHERE id=$1",
-        [task.id]
-      );
-    } catch (err) {
-      console.error(`Weekly bookkeeping data-request email failed for task ${task.id}:`, err.message);
-    }
+    if (alreadySentToday(task, now)) continue;
+    const isFirst = task.reminder_count === 0;
+    if (!isFirst && daysSinceLastEmail(task, today) < MONTHLY_QUARTERLY_INTERVAL_DAYS) continue;
+    await sendDataRequest(task, { isChaser: !isFirst, now });
+  }
+}
+
+// ── Weekly bookkeeping data-request (one email once the open date arrives) ──
+async function runWeeklyChaser(today, now) {
+  const { rows: tasks } = await db.query(
+    `${BOOKKEEPING_AWAITING_SQL}
+       AND config->>'bookkeepingFrequency' = 'Weekly'
+       AND reminder_count = 0
+       AND open_date IS NOT NULL
+       AND open_date <= $2
+       AND open_date >= $3`,
+    [
+      AWAITING_DATA_STATUSES,
+      today.toISOString().slice(0, 10),
+      new Date(today.getTime() - WEEKLY_CATCHUP_DAYS * 86400000).toISOString().slice(0, 10),
+    ]
+  );
+
+  for (const task of tasks) {
+    if (alreadySentToday(task, now)) continue;
+    await sendDataRequest(task, { isChaser: false, now });
   }
 }
 
 // ── Yearly bookkeeping data-request chaser ──────────────────────────────────
-async function runYearlyChaser(today) {
-  const { rows: tasks } = await db.query(`
-    SELECT id, client_id, title, task_type, metadata, last_reminder_sent_at, reminder_count
-    FROM tasks
-    WHERE task_type='BOOKKEEPING'
-      AND admin_status='Request Tax return information'
-      AND config->>'bookkeepingFrequency' IN ('Yearly', 'Annual')
-  `);
+async function runYearlyChaser(today, now) {
+  const { rows: tasks } = await db.query(
+    `${BOOKKEEPING_AWAITING_SQL} AND config->>'bookkeepingFrequency' IN ('Yearly','Annual')`,
+    [AWAITING_DATA_STATUSES]
+  );
 
   for (const task of tasks) {
     const periodKey = task.metadata?.periodKey || "";
@@ -116,43 +167,29 @@ async function runYearlyChaser(today) {
     const daysSinceFirstEmail = daysBetween(firstEmailDate, today);
     if (daysSinceFirstEmail < 0 || daysSinceFirstEmail > YEARLY_CHASER_WINDOW_DAYS) continue;
 
-    const isFirst = daysSinceFirstEmail === 0;
-    const isChaserDue = isFirst || (daysSinceFirstEmail % YEARLY_CHASER_INTERVAL_DAYS === 0);
-    if (!isChaserDue) continue;
-    // Guard against double-send if the scheduler runs more than once on the same day.
-    if (task.last_reminder_sent_at && daysBetween(new Date(task.last_reminder_sent_at), today) === 0) continue;
-
-    const { name, email } = await clientInfo(task.client_id);
-    if (!email) continue;
-    try {
-      await sendDataRequestEmail({ toEmail: email, clientName: name, taskTitle: task.title, taskType: task.task_type, isChaser: !isFirst });
-      await db.query(
-        "UPDATE tasks SET reminder_count=reminder_count+1, last_reminder_sent_at=NOW() WHERE id=$1",
-        [task.id]
-      );
-    } catch (err) {
-      console.error(`Yearly bookkeeping data-request email failed for task ${task.id}:`, err.message);
-    }
+    if (alreadySentToday(task, now)) continue;
+    const isFirst = task.reminder_count === 0;
+    if (!isFirst && daysSinceLastEmail(task, today) < YEARLY_CHASER_INTERVAL_DAYS) continue;
+    await sendDataRequest(task, { isChaser: !isFirst, now });
   }
 }
 
 // ── Query (bookkeeping) / HST-approval reminders — sent twice, 3 days apart ─
-async function runQueryAndApprovalReminders(today) {
+async function runQueryAndApprovalReminders(today, now) {
   const { rows: tasks } = await db.query(`
     SELECT id, client_id, title, task_type, admin_status, last_reminder_sent_at, reminder_count
     FROM tasks
     WHERE reminder_count < $1
+      AND closed_at IS NULL
       AND (
         (task_type='BOOKKEEPING' AND admin_status='Query sent to client')
-        OR (task_type='HST' AND admin_status='Sent draft HST to client for approval')
+        OR (task_type='HST' AND admin_status='Sent for Approval to client')
       )
   `, [QUERY_REMINDER_MAX_COUNT]);
 
   for (const task of tasks) {
-    const sinceLast = task.last_reminder_sent_at
-      ? daysBetween(new Date(task.last_reminder_sent_at), today)
-      : Infinity; // never sent — eligible immediately
-    if (sinceLast < QUERY_REMINDER_INTERVAL_DAYS) continue;
+    if (alreadySentToday(task, now)) continue;
+    if (daysSinceLastEmail(task, today) < QUERY_REMINDER_INTERVAL_DAYS) continue;
 
     const { name, email } = await clientInfo(task.client_id);
     if (!email) continue;
@@ -170,15 +207,11 @@ async function runQueryAndApprovalReminders(today) {
 }
 
 // ── Keep recurring bookkeeping periods flowing ──────────────────────────────
-// generateTasksForClient is only ever called from two places: a manual admin
-// "Generate Tasks" action, and once when a Client Take-On form is submitted.
-// Neither of those repeats on its own, so without this, a client's monthly/
-// weekly/quarterly/yearly bookkeeping task would only ever get created for
-// the single period active at submission time — next month's period would
-// never appear, and this chaser would have nothing to chase. Re-running it
-// daily for every client with a submitted bookkeeping config is safe: it's
-// idempotent (dedups on periodKey), so it's a no-op for periods that already
-// have a task row.
+// generateTasksForClient is otherwise only called from a manual admin
+// "Generate Tasks" action and once when a Client Take-On form is submitted.
+// Neither repeats, so without this a client's bookkeeping task would only
+// ever exist for the period active at submission time. Re-running it is safe:
+// it dedups on periodKey, and only re-dates open tasks whose plan changed.
 async function regenerateRecurringTasks() {
   const { rows } = await db.query(`
     SELECT client_id, answers
@@ -188,10 +221,6 @@ async function regenerateRecurringTasks() {
   `);
 
   for (const row of rows) {
-    // Shares recurringConfigFromAnswers with the take-on PUT handler so this
-    // sweep honours each service's Yes/No toggle the same way a save does —
-    // a reimplementation here previously skipped that check entirely, so
-    // switching Bookkeeping back to No didn't stop the daily regeneration.
     const config = recurringConfigFromAnswers(row.answers || {});
     if (!config) continue;
     try {
@@ -202,13 +231,24 @@ async function regenerateRecurringTasks() {
   }
 }
 
-async function runChaserSweep() {
+// Runs hourly. Task generation is time-of-day agnostic and must not be held
+// back by the email window — a task still has to appear on the day it opens
+// even if that day is a Saturday. Only the emails wait for an open window.
+async function runChaserSweep(now = new Date()) {
   const today = todayUTC();
   await regenerateRecurringTasks();
-  await runMonthlyQuarterlyChaser(today);
-  await runWeeklyChaser(today);
-  await runYearlyChaser(today);
-  await runQueryAndApprovalReminders(today);
+
+  const window = canSendAt(now);
+  if (!window.ok) {
+    console.log(`  ⏸  Chaser emails held: ${window.reason} (Atlantic ${window.local.ymd} ${String(window.local.hour).padStart(2, "0")}:00)`);
+    return { generated: true, emailsSent: false, reason: window.reason };
+  }
+
+  await runMonthlyQuarterlyChaser(today, now);
+  await runWeeklyChaser(today, now);
+  await runYearlyChaser(today, now);
+  await runQueryAndApprovalReminders(today, now);
+  return { generated: true, emailsSent: true };
 }
 
-module.exports = { runChaserSweep };
+module.exports = { runChaserSweep, AWAITING_DATA_STATUSES, isMissingDataChase };

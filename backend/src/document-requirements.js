@@ -64,10 +64,83 @@ function normalizeDocumentRequirements(input, metadata = {}) {
     .filter(Boolean);
 }
 
-function getDocumentRequirementsFromTask(task) {
-  const meta = typeof task.metadata === "string"
+// ── Per-task document requests (metadata.documentRequests) ──────────────────
+//
+// The catalog-based `documentRequirements` above only answers "how many of
+// this fixed type?". The admin task panel needs the richer per-request fields
+// the General Documentation editor already has — a free-text name, a
+// placeholder, its own accepted file types and notes — plus the ability to ask
+// for the SAME kind of document more than once ("Business bank statement
+// ...0010" and "...0547" as two separate requests). That needs a free-form
+// key, so these are stored per task in metadata.documentRequests and shaped
+// exactly like general_doc_configs.fields.
+//
+// Both representations resolve to one slot-based structure (buildSlots below),
+// which is what the Flutter app already consumes — a task configured either
+// way looks identical to the client.
+
+const REQUEST_FILE_TYPES = ["pdf", "jpg", "jpeg", "png", "xls", "xlsx", "doc", "docx", "csv"];
+
+function slugifyRequestKey(value) {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+// Normalizes the editor's rows and guarantees unique keys, so adding the same
+// document type twice produces two independent requests (…, …_2) rather than
+// one silently overwriting the other's uploads.
+function normalizeDocumentRequests(input) {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const [idx, raw] of input.entries()) {
+    if (!raw || typeof raw !== "object") continue;
+    const name = String(raw.name || "").trim();
+    let key = slugifyRequestKey(raw.key) || slugifyRequestKey(name);
+    if (!key) continue;
+    if (seen.has(key)) {
+      let n = 2;
+      while (seen.has(`${key}_${n}`)) n++;
+      key = `${key}_${n}`;
+    }
+    seen.add(key);
+    const accepted = Array.isArray(raw.acceptedTypes)
+      ? raw.acceptedTypes.map((t) => String(t).toLowerCase()).filter((t) => REQUEST_FILE_TYPES.includes(t))
+      : [];
+    out.push({
+      key,
+      name:          name || key,
+      placeholder:   String(raw.placeholder || "").trim(),
+      required:      raw.required === true,
+      maxCount:      Math.max(1, Math.min(50, Number(raw.maxCount) || 1)),
+      acceptedTypes: accepted.length ? [...new Set(accepted)] : REQUEST_FILE_TYPES,
+      notes:         String(raw.notes || "").trim(),
+      displayOrder:  typeof raw.displayOrder === "number" ? raw.displayOrder : idx + 1,
+    });
+  }
+  return out.sort((a, b) => a.displayOrder - b.displayOrder);
+}
+
+function taskMetadata(task) {
+  return typeof task.metadata === "string"
     ? JSON.parse(task.metadata || "{}")
     : (task.metadata || {});
+}
+
+function getDocumentRequirementsFromTask(task) {
+  const meta = taskMetadata(task);
+
+  // The richer per-task requests win when configured; the catalog form stays
+  // the fallback so tasks created before this feature keep working untouched.
+  const requests = normalizeDocumentRequests(meta.documentRequests);
+  if (requests.length) {
+    return requests.map((r) => ({
+      key:      r.key,
+      label:    r.name,
+      quantity: r.maxCount,
+      group:    null,
+      request:  r,
+    }));
+  }
 
   if (Array.isArray(meta.documentRequirements) && meta.documentRequirements.length) {
     return normalizeDocumentRequirements(meta.documentRequirements);
@@ -109,16 +182,22 @@ async function buildDocumentRequirements(task) {
 
   return requirements.map((req) => {
     const cat = CATALOG_BY_KEY[req.key];
+    const uploaded = docs.filter((d) => d.category === req.key).length;
     return {
       key:      req.key,
       label:    req.label,
       group:    req.group,
       category: req.key,
       quantity: req.quantity,
-      required: cat?.required ?? false,
+      required: req.request ? req.request.required : (cat?.required ?? false),
+      // Only present for metadata.documentRequests-configured tasks — the
+      // Flutter app ignores unknown keys, and uses them when it has them.
+      placeholder:   req.request?.placeholder ?? null,
+      acceptedTypes: req.request?.acceptedTypes ?? null,
+      notes:         req.request?.notes ?? null,
       slots:    buildSlots(req.quantity, docs, req.key),
-      uploadedCount: docs.filter((d) => d.category === req.key).length,
-      pendingCount:  req.quantity - docs.filter((d) => d.category === req.key).length,
+      uploadedCount: uploaded,
+      pendingCount:  Math.max(0, req.quantity - uploaded),
     };
   });
 }
@@ -132,14 +211,16 @@ function validateUploadSlot(task, categoryKey, slotIndex) {
   if (!slot || slot < 1 || slot > req.quantity) {
     return { ok: false, message: `slotIndex must be between 1 and ${req.quantity} for ${req.label}` };
   }
-  return { ok: true, requirement: req, slotIndex: slot };
+  return { ok: true, requirement: req, slotIndex: slot, acceptedTypes: req.request?.acceptedTypes ?? null };
 }
 
 module.exports = {
   DOCUMENT_CATALOG,
   CATALOG_BY_KEY,
   TASK_TYPES_WITH_DOCUMENTS,
+  REQUEST_FILE_TYPES,
   normalizeDocumentRequirements,
+  normalizeDocumentRequests,
   getDocumentRequirementsFromTask,
   buildDocumentRequirements,
   validateUploadSlot,

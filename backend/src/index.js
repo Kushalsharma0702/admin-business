@@ -117,9 +117,13 @@ app.listen(PORT, () => {
 if (process.env.NODE_APP_INSTANCE === undefined || process.env.NODE_APP_INSTANCE === "0") {
   const cron = require("node-cron");
   const { runChaserSweep } = require("./chaser-scheduler");
-  // 08:00 UTC daily.
-  cron.schedule("0 8 * * *", () => {
+  // Hourly, on the hour. The sweep itself decides whether this tick is inside
+  // the Atlantic send window (weekday, not a Canadian bank holiday, >= 09:00,
+  // and >= 13:00 on Mondays) — a daily 08:00 UTC run could never honour a
+  // time-of-day rule. Task regeneration runs on every tick; only the emails
+  // wait for the window, and a per-task guard keeps it to one email per day.
+  cron.schedule("0 * * * *", () => {
     runChaserSweep().catch((err) => console.error("Chaser sweep failed:", err.message));
   });
-  console.log("  Chaser email sweep scheduled — daily at 08:00 UTC\n");
+  console.log("  Chaser sweep scheduled — hourly; emails sent only inside the Atlantic send window\n");
 }

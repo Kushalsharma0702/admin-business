@@ -9,17 +9,46 @@ const schedule = require("./schedule");
 const { getWorkflow } = require("./workflows");
 const { initializeSubtasks } = require("./workflow-service");
 
+// A DATE column comes back from node-pg as a JS Date at LOCAL midnight, so the
+// calendar date lives in its local components. Using toISOString() here would
+// read one day early on any host east of UTC (the prod box is UTC, a dev box
+// generally isn't) and make every comparison below disagree — re-dating every
+// task on every sweep, forever.
+function dateOnly(value) {
+  if (!value) return null;
+  if (typeof value === "string") return value.slice(0, 10);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${value.getFullYear()}-${p(value.getMonth() + 1)}-${p(value.getDate())}`;
+}
+
 // Given a client's service config, create every currently-active recurring
 // filing task with Excel-accurate open/due dates. Idempotent: dedups on
-// metadata.periodKey per client. Returns { created, count, skipped }.
+// metadata.periodKey per client, and re-syncs the due date of open tasks whose
+// period is still planned. Returns { created, count, skipped, rescheduled }.
 async function generateTasksForClient(clientId, config, assignedById) {
   const planned = schedule.planFilingTasks(config || {}, new Date());
 
   const { rows: existing } = await db.query(
-    "SELECT metadata->>'periodKey' AS pk FROM tasks WHERE client_id=$1 AND metadata->>'periodKey' IS NOT NULL",
+    `SELECT id, metadata->>'periodKey' AS pk, due_date, closed_at
+     FROM tasks WHERE client_id=$1 AND metadata->>'periodKey' IS NOT NULL`,
     [clientId]
   );
-  const have = new Set(existing.map((r) => r.pk));
+  const have = new Map(existing.map((r) => [r.pk, r]));
+
+  // Re-planning is also how a changed schedule reaches tasks that already
+  // exist. Editing the Bookkeeping Due Date rule has to move the deadline on
+  // the periods already on the client's plate, not only on future ones — so
+  // refresh due_date wherever the plan now disagrees. Closed tasks are left
+  // alone: their deadline is history.
+  const rescheduled = [];
+  for (const p of planned) {
+    const row = have.get(p.periodKey);
+    if (!row || row.closed_at) continue;
+    const current = dateOnly(row.due_date);
+    if (current === p.dueDate) continue;
+    await db.query("UPDATE tasks SET due_date=$1, updated_at=NOW() WHERE id=$2", [p.dueDate, row.id]);
+    rescheduled.push({ periodKey: p.periodKey, from: current, to: p.dueDate });
+  }
 
   const created = [];
   for (const p of planned) {
@@ -43,7 +72,10 @@ async function generateTasksForClient(clientId, config, assignedById) {
     created.push({ periodKey: p.periodKey, taskType: p.taskType, openDate: p.openDate, dueDate: p.dueDate });
   }
 
-  return { created, count: created.length, skipped: planned.length - created.length };
+  return {
+    created, count: created.length, skipped: planned.length - created.length,
+    rescheduled, rescheduledCount: rescheduled.length,
+  };
 }
 
 module.exports = { generateTasksForClient };

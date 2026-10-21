@@ -1,15 +1,17 @@
 import { createFileRoute, useParams, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore, uid } from "@/store/useAppStore";
-import { clientsApi, tasksApi, metaApi, generalDocsAdminApi, profilesAdminApi, onboardingAdminApi, clientTakeOnAdminApi, notesAdminApi, taskDetailApi, ADMIN_STATUSES, type ApiTask, type AdminStatus, type TaskTypeInfo, type GeneralDocField, type GeneralDocStatus, type UserProfile, type OnboardingSection, type OnboardingField, type ConfigFieldDef, type ClientNote, type TaskComment, type TaskAttachment } from "@/lib/api";
+import { clientsApi, tasksApi, metaApi, generalDocsAdminApi, profilesAdminApi, onboardingAdminApi, clientTakeOnAdminApi, notesAdminApi, taskDetailApi, taskDocsApi, assignableAdminsApi, ADMIN_STATUSES, type ApiTask, type AdminStatus, type TaskTypeInfo, type GeneralDocField, type GeneralDocStatus, type UserProfile, type OnboardingSection, type OnboardingField, type ConfigFieldDef, type ClientNote, type TaskComment, type TaskAttachment, type DueRule, type TaskDocRequest, type MissingDataRequest } from "@/lib/api";
 import { GeneralDocsConfig } from "@/components/app/GeneralDocsConfig";
+import { DueRuleField } from "@/components/app/DueRuleField";
+import { TaskDocRequestsConfig, toRequestDraft, type RequestDraft } from "@/components/app/TaskDocRequestsConfig";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/app/EmptyState";
 import { fmtDate, fmtMoney } from "@/components/app/utils";
-import { Upload, FileText, StickyNote, FileQuestion, FilePlus, Clock, Send, Plus, Loader2, WifiOff, Copy, Check, ImagePlus, ImageIcon, X, Paperclip, Download, Trash2, MessageSquare, History } from "lucide-react";
+import { Upload, FileText, StickyNote, FileQuestion, FilePlus, Clock, Send, Plus, Loader2, WifiOff, Copy, Check, ImagePlus, ImageIcon, X, Paperclip, Download, Trash2, MessageSquare, History, CheckCircle2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -406,7 +408,9 @@ function Tasks({ clientId }: { clientId: string }) {
     description: "",
     openDate: "",
     dueDate: "",
+    assignedTo: "",
   });
+  const [newDocRequests, setNewDocRequests] = useState<RequestDraft[]>([]);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
 
   // ── Edit-task dialog ──
@@ -414,10 +418,25 @@ function Tasks({ clientId }: { clientId: string }) {
   const [editing, setEditing] = useState<ApiTask | null>(null);
   const [editForm, setEditForm] = useState({
     title: "", adminStatus: "Data not received" as AdminStatus,
-    description: "", openDate: "", dueDate: "",
+    description: "", openDate: "", dueDate: "", assignedTo: "",
   });
   const [editConfig, setEditConfig] = useState<Record<string, unknown>>({});
+  const [editDocRequests, setEditDocRequests] = useState<RequestDraft[]>([]);
+  // ── Missing-data request (shown once the task is "Partial Data received") ──
+  const [missing, setMissing] = useState<{ period: string; note: string; outstandingKeys: string[] }>(
+    { period: "", note: "", outstandingKeys: [] }
+  );
+  const [missingBusy, setMissingBusy] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [downloadingZip, setDownloadingZip] = useState(false);
+
+  // Staff a task can be assigned to. Cheap and shared across every dialog.
+  const { data: adminsRes } = useQuery({
+    queryKey: ["assignable-admins"],
+    queryFn: () => assignableAdminsApi.list(),
+    staleTime: 300_000,
+  });
+  const assignableAdmins = adminsRes?.data ?? [];
 
   // ── Task-detail panel: Comments / Activity sub-tab, new-comment draft ──
   const [detailTab, setDetailTab] = useState<"comments" | "activity">("comments");
@@ -452,15 +471,52 @@ function Tasks({ clientId }: { clientId: string }) {
     return out;
   }, [form.taskType, activeSubtasks, hstMainTasks]);
 
+  // Active and Closed are fetched separately. Closed is paged — a long-lived
+  // client accumulates years of them and the tab must stay cheap to open,
+  // while "Load more" keeps the old rows reachable rather than dropping them.
+  const CLOSED_PAGE_SIZE = 10;
+  const [closedPage, setClosedPage] = useState(1);
+
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["client-tasks", clientId],
-    queryFn: () => tasksApi.listForClient(clientId),
+    queryKey: ["client-tasks", clientId, "active"],
+    queryFn: () => tasksApi.listForClientByState(clientId, false, 1, 500),
     staleTime: 15_000,
   });
 
-  const tasks: ApiTask[] = data?.data ?? [];
-  const active = tasks.filter((t) => t.status !== "complete");
-  const done = tasks.filter((t) => t.status === "complete");
+  const { data: closedData, isFetching: closedFetching } = useQuery({
+    queryKey: ["client-tasks", clientId, "closed", closedPage],
+    queryFn: () => tasksApi.listForClientByState(clientId, true, closedPage, CLOSED_PAGE_SIZE),
+    staleTime: 15_000,
+    // Keeps the rows already on screen visible while the next page loads,
+    // so "Load more" appends instead of blanking the table.
+    placeholderData: (prev) => prev,
+  });
+
+  const active: ApiTask[] = data?.data ?? [];
+  // Pages accumulate: every page up to `closedPage` stays rendered.
+  const [closedAcc, setClosedAcc] = useState<ApiTask[]>([]);
+  useEffect(() => {
+    const rows = closedData?.data;
+    if (!rows) return;
+    setClosedAcc((prev) => {
+      const merged = closedPage === 1 ? rows : [...prev, ...rows];
+      // Dedup by id — a task closed between two page fetches can otherwise
+      // shift rows across the page boundary and appear twice.
+      return Array.from(new Map(merged.map((t) => [t.id, t])).values());
+    });
+  }, [closedData, closedPage]);
+
+  const closedTotal = closedData?.pagination?.total_items ?? 0;
+  const hasMoreClosed = closedAcc.length < closedTotal;
+
+  // Any mutation that can move a task between the two tables resets the
+  // Closed list to page 1, so the accumulator can't hold stale rows.
+  const invalidateTasks = () => {
+    setClosedPage(1);
+    setClosedAcc([]);
+    queryClient.invalidateQueries({ queryKey: ["client-tasks", clientId] });
+    queryClient.invalidateQueries({ queryKey: ["admin-tasks"] });
+  };
 
   // The config schema for the currently selected workflow task type (empty for non-workflow types)
   const activeSchema = workflowTypes.find((t) => t.key === form.taskType)?.configSchema ?? [];
@@ -522,8 +578,10 @@ function Tasks({ clientId }: { clientId: string }) {
         taskType: form.taskType,
         selectedSubtasks,
         adminStatus: form.adminStatus,
+        assignedTo: form.assignedTo || null,
         openDate: form.openDate || undefined,
         dueDate: form.dueDate || undefined,
+        documentRequests: newDocRequests.length ? newDocRequests : undefined,
         config: Object.keys(configPayload).length ? configPayload : undefined,
       });
       toast.success(
@@ -532,12 +590,12 @@ function Tasks({ clientId }: { clientId: string }) {
           : "Task assigned to client"
       );
       setOpen(false);
-      setForm({ title: "", taskType: "CORPORATE_TAX_RETURN", adminStatus: "Data not received", description: "", openDate: "", dueDate: "" });
+      setForm({ title: "", taskType: "CORPORATE_TAX_RETURN", adminStatus: "Data not received", description: "", openDate: "", dueDate: "", assignedTo: "" });
       setConfig({});
+      setNewDocRequests([]);
       setHstMainTasks(HST_MAIN_TASK_OPTIONS.map((o) => o.key));
       setSelectedSubtasks([]);
-      queryClient.invalidateQueries({ queryKey: ["client-tasks", clientId] });
-      queryClient.invalidateQueries({ queryKey: ["admin-tasks"] });
+      invalidateTasks();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to create task");
     }
@@ -548,8 +606,7 @@ function Tasks({ clientId }: { clientId: string }) {
     try {
       await tasksApi.update(taskId, { adminStatus: newStatus });
       toast.success(`Status → ${newStatus}`);
-      queryClient.invalidateQueries({ queryKey: ["client-tasks", clientId] });
-      queryClient.invalidateQueries({ queryKey: ["admin-tasks"] });
+      invalidateTasks();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Update failed");
     } finally {
@@ -567,8 +624,17 @@ function Tasks({ clientId }: { clientId: string }) {
       description: t.description ?? "",
       openDate: toDateInput(t.openDate),
       dueDate: toDateInput(t.dueDate),
+      assignedTo: t.assignedTo ?? "",
     });
     setEditConfig({ ...(t.config ?? {}) });
+    const requests = (t.metadata?.documentRequests as Partial<TaskDocRequest>[] | undefined) ?? [];
+    setEditDocRequests(requests.map(toRequestDraft));
+    const mdr = t.metadata?.missingDataRequest as MissingDataRequest | undefined;
+    setMissing({
+      period: mdr?.period ?? "",
+      note: mdr?.note ?? "",
+      outstandingKeys: mdr?.outstandingKeys ?? [],
+    });
     setDetailTab("comments");
     setNewComment("");
     setEditing(t);
@@ -587,6 +653,11 @@ function Tasks({ clientId }: { clientId: string }) {
       if (editConfig[f.key] !== undefined) configPayload[f.key] = editConfig[f.key];
     }
 
+    // A request with no name has no key either, so the server would drop it
+    // silently — say so instead of appearing to save it.
+    const unnamed = editDocRequests.filter((r) => !(r.name ?? "").trim() && !(r.key ?? "").trim());
+    if (unnamed.length) { toast.error("Every document request needs a field name"); return; }
+
     setSavingEdit(true);
     try {
       await tasksApi.update(editing.id, {
@@ -596,12 +667,13 @@ function Tasks({ clientId }: { clientId: string }) {
         description: editForm.description.trim() || null,
         openDate: editForm.openDate || null,
         dueDate: editForm.dueDate || null,
+        assignedTo: editForm.assignedTo || null,
+        documentRequests: editDocRequests,
         ...(Object.keys(configPayload).length > 0 ? { config: configPayload } : {}),
       });
       toast.success("Task updated");
       setEditing(null);
-      queryClient.invalidateQueries({ queryKey: ["client-tasks", clientId] });
-      queryClient.invalidateQueries({ queryKey: ["admin-tasks"] });
+      invalidateTasks();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to update task");
     } finally {
@@ -616,6 +688,78 @@ function Tasks({ clientId }: { clientId: string }) {
     enabled: editing !== null,
   });
   const detail = detailData?.data;
+
+  // What the client has actually uploaded against this task's document requests.
+  const { data: docsData } = useQuery({
+    queryKey: ["task-docs", editing?.id],
+    queryFn: () => taskDocsApi.get(editing!.id),
+    enabled: editing !== null,
+  });
+
+  const handleDownloadTaskDoc = async (documentId: string) => {
+    try {
+      const res = await taskDocsApi.getDownloadUrl(documentId, true);
+      window.open(res.data.downloadUrl, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not open that file");
+    }
+  };
+
+  const handleDownloadAllDocs = async () => {
+    if (!editing) return;
+    setDownloadingZip(true);
+    try {
+      const safe = (editing.title || "task").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 60);
+      await taskDocsApi.downloadArchive(editing.id, `${safe}_documents.zip`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not build the archive");
+    } finally {
+      setDownloadingZip(false);
+    }
+  };
+
+  const saveMissingData = async (sendEmail: boolean) => {
+    if (!editing) return;
+    if (!missing.period.trim() && !missing.note.trim() && missing.outstandingKeys.length === 0) {
+      toast.error("Add a period, a note, or tick the documents still outstanding");
+      return;
+    }
+    setMissingBusy(true);
+    try {
+      const res = await taskDocsApi.saveMissingDataRequest(editing.id, {
+        period: missing.period.trim() || undefined,
+        note: missing.note.trim() || undefined,
+        outstandingKeys: missing.outstandingKeys,
+        sendEmail,
+      });
+      // The request saves even when the email fails — the server says which.
+      if (res.data.emailError) toast.warning(res.message);
+      else toast.success(sendEmail ? "Saved and emailed to the client" : "Missing-data request saved");
+      setEditForm((f) => ({ ...f, adminStatus: "Partial Data received" as AdminStatus }));
+      queryClient.invalidateQueries({ queryKey: ["task-docs", editing.id] });
+      invalidateTasks();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not save the request");
+    } finally {
+      setMissingBusy(false);
+    }
+  };
+
+  const clearMissingData = async () => {
+    if (!editing) return;
+    setMissingBusy(true);
+    try {
+      await taskDocsApi.clearMissingDataRequest(editing.id);
+      setMissing({ period: "", note: "", outstandingKeys: [] });
+      toast.success("Missing-data request cleared");
+      queryClient.invalidateQueries({ queryKey: ["task-docs", editing.id] });
+      invalidateTasks();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not clear the request");
+    } finally {
+      setMissingBusy(false);
+    }
+  };
 
   const addCommentMutation = useMutation({
     mutationFn: (text: string) => taskDetailApi.addComment(editing!.id, text),
@@ -655,9 +799,41 @@ function Tasks({ clientId }: { clientId: string }) {
     try {
       await tasksApi.delete(taskId);
       toast.success("Task deleted");
-      queryClient.invalidateQueries({ queryKey: ["client-tasks", clientId] });
+      invalidateTasks();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Delete failed");
+    }
+  };
+
+  // ── Mark as done / reopen ──
+  // Admin-side only: the client's own pending/complete state is untouched,
+  // so closing a task they never submitted doesn't read back to them as done.
+  const [closingTask, setClosingTask] = useState<ApiTask | null>(null);
+  const [closeBusy, setCloseBusy] = useState(false);
+
+  const confirmClose = async () => {
+    if (!closingTask) return;
+    setCloseBusy(true);
+    try {
+      await tasksApi.close(closingTask.id);
+      toast.success(`"${closingTask.title}" moved to Closed tasks`);
+      setClosingTask(null);
+      if (editing?.id === closingTask.id) setEditing(null);
+      invalidateTasks();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Could not close the task");
+    } finally {
+      setCloseBusy(false);
+    }
+  };
+
+  const handleReopen = async (task: ApiTask) => {
+    try {
+      await tasksApi.reopen(task.id);
+      toast.success(`"${task.title}" reopened`);
+      invalidateTasks();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Could not reopen the task");
     }
   };
 
@@ -694,9 +870,10 @@ function Tasks({ clientId }: { clientId: string }) {
               <tr>
                 <th className="text-left px-4 py-2">Task</th>
                 <th className="text-left px-4 py-2">Type</th>
+                <th className="text-left px-4 py-2">Assignee</th>
                 <th className="text-left px-4 py-2">Client Status</th>
                 <th className="text-left px-4 py-2">Admin Status</th>
-                <th className="text-left px-4 py-2">Assigned</th>
+                <th className="text-left px-4 py-2">Due</th>
                 <th className="px-4 py-2" />
               </tr>
             </thead>
@@ -706,8 +883,13 @@ function Tasks({ clientId }: { clientId: string }) {
                   className="border-b border-border last:border-0 hover:bg-muted/40 cursor-pointer">
                   <td className="px-4 py-2.5 font-medium">{t.title}</td>
                   <td className="px-4 py-2.5 text-muted-foreground text-xs">{t.taskType ?? "—"}</td>
+                  <td className="px-4 py-2.5 text-xs">
+                    {t.assignedToName ?? <span className="text-muted-foreground">Unassigned</span>}
+                  </td>
                   <td className="px-4 py-2.5">
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-medium">Pending</span>
+                    {t.status === "complete"
+                      ? <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-medium">Submitted</span>
+                      : <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-medium">Pending</span>}
                   </td>
                   <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                     <select
@@ -720,10 +902,13 @@ function Tasks({ clientId }: { clientId: string }) {
                     </select>
                     {updatingId === t.id && <Loader2 className="inline w-3 h-3 animate-spin ml-1 text-muted-foreground" />}
                   </td>
-                  <td className="px-4 py-2.5 text-muted-foreground text-xs">{fmtDate(t.createdAt)}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground text-xs">{t.dueDate ? fmtDate(t.dueDate) : "—"}</td>
                   <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-3">
                       <button onClick={() => startEdit(t)} className="text-xs text-primary hover:underline">Edit</button>
+                      <button onClick={() => setClosingTask(t)} className="text-xs text-emerald-600 hover:underline inline-flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" />Mark as done
+                      </button>
                       <button onClick={() => handleDelete(t.id)} className="text-xs text-destructive hover:underline">Delete</button>
                     </div>
                   </td>
@@ -734,42 +919,74 @@ function Tasks({ clientId }: { clientId: string }) {
         )}
       </Card>
 
-      {/* ── Completed tasks ── */}
-      {done.length > 0 && (
+      {/* ── Closed tasks ── */}
+      {closedAcc.length > 0 && (
         <Card className="p-0 overflow-hidden">
-          <div className="px-4 py-3 border-b border-border font-semibold text-sm">Completed by client ({done.length})</div>
+          <div className="px-4 py-3 border-b border-border font-semibold text-sm">
+            Closed tasks ({closedTotal})
+          </div>
           <table className="w-full text-sm">
             <thead className="text-xs uppercase text-muted-foreground bg-muted/40">
               <tr>
                 <th className="text-left px-4 py-2">Task</th>
                 <th className="text-left px-4 py-2">Type</th>
+                <th className="text-left px-4 py-2">Assignee</th>
                 <th className="text-left px-4 py-2">Admin Status</th>
-                <th className="text-left px-4 py-2">Completed</th>
+                <th className="text-left px-4 py-2">Closing date</th>
+                <th className="px-4 py-2" />
               </tr>
             </thead>
             <tbody>
-              {done.map((t) => (
+              {closedAcc.map((t) => (
                 <tr key={t.id} onClick={() => startEdit(t)}
                   className="border-b border-border last:border-0 hover:bg-muted/40 cursor-pointer">
                   <td className="px-4 py-2.5">{t.title}</td>
                   <td className="px-4 py-2.5 text-muted-foreground text-xs">{t.taskType ?? "—"}</td>
-                  <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
-                    <select
-                      value={t.adminStatus}
-                      disabled={updatingId === t.id}
-                      onChange={(e) => handleStatusChange(t.id, e.target.value as AdminStatus)}
-                      className="text-xs border border-border rounded px-1.5 py-1 bg-background min-w-[160px] disabled:opacity-50"
-                    >
-                      {ADMIN_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-                    </select>
+                  <td className="px-4 py-2.5 text-xs">
+                    {t.assignedToName ?? <span className="text-muted-foreground">—</span>}
                   </td>
-                  <td className="px-4 py-2.5 text-muted-foreground text-xs">{fmtDate(t.completedAt ?? t.updatedAt)}</td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">{t.adminStatus}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground text-xs">
+                    {fmtDate(t.closedAt ?? undefined)}
+                    {t.closedByName && <span className="block text-[11px]">by {t.closedByName}</span>}
+                  </td>
+                  <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center justify-end">
+                      <button onClick={() => handleReopen(t)} className="text-xs text-primary hover:underline">Reopen</button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+          {hasMoreClosed && (
+            <div className="px-4 py-3 border-t border-border flex justify-center">
+              <Button variant="outline" size="sm" disabled={closedFetching}
+                onClick={() => setClosedPage((p) => p + 1)}>
+                {closedFetching && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
+                Load more ({closedTotal - closedAcc.length} older)
+              </Button>
+            </div>
+          )}
         </Card>
       )}
+
+      {/* ── Mark-as-done confirmation ── */}
+      <Dialog open={closingTask !== null} onOpenChange={(o) => { if (!o && !closeBusy) setClosingTask(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Mark this task as done?</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            <span className="text-foreground font-medium">{closingTask?.title}</span> moves to Closed tasks.
+            The client's own view of the task is unchanged, and you can reopen it at any time.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setClosingTask(null)} disabled={closeBusy}>Cancel</Button>
+            <Button onClick={confirmClose} disabled={closeBusy}>
+              {closeBusy && <Loader2 className="w-4 h-4 mr-1 animate-spin" />}Yes, mark as done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Create task dialog ── */}
       <Dialog open={open} onOpenChange={setOpen}>
@@ -805,6 +1022,14 @@ function Tasks({ clientId }: { clientId: string }) {
                 {allowedWorkflowTypes.map((t) => (
                   <option key={t.key} value={t.key}>{t.displayName}</option>
                 ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Assignee</label>
+              <select className="mt-1 w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
+                value={form.assignedTo} onChange={(e) => setForm({ ...form, assignedTo: e.target.value })}>
+                <option value="">Unassigned</option>
+                {assignableAdmins.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
             </div>
             <div>
@@ -852,6 +1077,11 @@ function Tasks({ clientId }: { clientId: string }) {
                 ))}
               </div>
             )}
+
+            {/* ── Documents requested from the client ── */}
+            <div className="rounded-md border border-border p-3 bg-muted/30">
+              <TaskDocRequestsConfig value={newDocRequests} onChange={setNewDocRequests} />
+            </div>
 
             {/* ── HST main task list ── */}
             {form.taskType === "HST" && (
@@ -946,11 +1176,24 @@ function Tasks({ clientId }: { clientId: string }) {
                     <Input value={editing.taskType ?? "—"} disabled className="mt-1" />
                   </div>
                   <div>
-                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Admin Status</label>
+                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Assignee</label>
+                    <select className="mt-1 w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
+                      value={editForm.assignedTo} onChange={(e) => setEditForm({ ...editForm, assignedTo: e.target.value })}>
+                      <option value="">Unassigned</option>
+                      {assignableAdmins.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Status of the task</label>
                     <select className="mt-1 w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
                       value={editForm.adminStatus} onChange={(e) => setEditForm({ ...editForm, adminStatus: e.target.value as AdminStatus })}>
                       {ADMIN_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                     </select>
+                    {editing.closedAt && (
+                      <p className="text-[11px] text-muted-foreground mt-1">
+                        Closed {fmtDate(editing.closedAt)}{editing.closedByName ? ` by ${editing.closedByName}` : ""}.
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Description (optional)</label>
@@ -984,6 +1227,100 @@ function Tasks({ clientId }: { clientId: string }) {
                           onChange={(v) => setEditConfig((prev) => ({ ...prev, [f.key]: v }))}
                         />
                       ))}
+                    </div>
+                  )}
+
+                  {/* ── Documents requested from the client ── */}
+                  <div className="rounded-md border border-border p-3 bg-muted/30">
+                    <TaskDocRequestsConfig
+                      value={editDocRequests}
+                      onChange={setEditDocRequests}
+                      requirements={docsData?.data.requirements}
+                      onDownload={handleDownloadTaskDoc}
+                      onDownloadAll={handleDownloadAllDocs}
+                      downloadingAll={downloadingZip}
+                    />
+                  </div>
+
+                  {/* ── Missing data (opens on "Partial Data received") ──
+                      Narrows the ask to what is still outstanding and switches
+                      the chaser emails from "send your documents" to "we are
+                      still missing these". */}
+                  {editForm.adminStatus === "Partial Data received" && (
+                    <div className="rounded-md border border-amber-300/60 bg-amber-50/60 dark:bg-amber-950/20 p-3 space-y-3">
+                      <div>
+                        <p className="text-sm font-medium">Request the missing data</p>
+                        <p className="text-xs text-muted-foreground">
+                          Tick what is still outstanding and name the period. From now on the
+                          client's reminders ask for these items instead of the full set.
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Period requested</label>
+                        <Input
+                          className="mt-1" placeholder="e.g. Jan 2026 – Mar 2026"
+                          value={missing.period}
+                          onChange={(e) => setMissing((m) => ({ ...m, period: e.target.value }))}
+                        />
+                      </div>
+
+                      {editDocRequests.filter((r) => r.key).length > 0 && (
+                        <div>
+                          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Still outstanding</label>
+                          <div className="mt-1 border border-border rounded-md divide-y divide-border bg-background">
+                            {editDocRequests.filter((r) => r.key).map((r) => (
+                              <label key={r.key} className="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer text-sm">
+                                <input
+                                  type="checkbox"
+                                  className="h-4 w-4 accent-primary"
+                                  checked={missing.outstandingKeys.includes(r.key!)}
+                                  onChange={(e) => setMissing((m) => ({
+                                    ...m,
+                                    outstandingKeys: e.target.checked
+                                      ? [...new Set([...m.outstandingKeys, r.key!])]
+                                      : m.outstandingKeys.filter((k) => k !== r.key),
+                                  }))}
+                                />
+                                <span>{r.name || r.key}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Note to the client</label>
+                        <Textarea
+                          className="mt-1" rows={3}
+                          placeholder="What exactly is missing, and anything they need to know…"
+                          value={missing.note}
+                          onChange={(e) => setMissing((m) => ({ ...m, note: e.target.value }))}
+                        />
+                      </div>
+
+                      {docsData?.data.missingDataRequest?.requestedAt && (
+                        <p className="text-[11px] text-muted-foreground">
+                          Last requested {fmtDate(docsData.data.missingDataRequest.requestedAt)}
+                          {docsData.data.missingDataRequest.requestedByName
+                            ? ` by ${docsData.data.missingDataRequest.requestedByName}` : ""}.
+                        </p>
+                      )}
+
+                      <div className="flex flex-wrap gap-2">
+                        <Button size="sm" disabled={missingBusy} onClick={() => saveMissingData(true)}>
+                          {missingBusy && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
+                          <Send className="w-3.5 h-3.5 mr-1" />Save &amp; email client
+                        </Button>
+                        <Button size="sm" variant="outline" disabled={missingBusy} onClick={() => saveMissingData(false)}>
+                          Save without emailing
+                        </Button>
+                        {docsData?.data.missingDataRequest && (
+                          <Button size="sm" variant="ghost" className="text-destructive" disabled={missingBusy} onClick={clearMissingData}>
+                            Clear
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1105,11 +1442,21 @@ function Tasks({ clientId }: { clientId: string }) {
               </div>
             );
           })()}
-          <DialogFooter className="px-5 py-3 border-t border-border shrink-0">
-            <Button variant="outline" onClick={() => setEditing(null)} disabled={savingEdit}>Cancel</Button>
-            <Button onClick={handleSaveEdit} disabled={savingEdit}>
-              {savingEdit && <Loader2 className="w-4 h-4 mr-1 animate-spin" />}Save changes
-            </Button>
+          <DialogFooter className="px-5 py-3 border-t border-border shrink-0 sm:justify-between">
+            <div>
+              {editing && (editing.closedAt
+                ? <Button variant="outline" size="sm" onClick={() => handleReopen(editing)} disabled={savingEdit}>Reopen task</Button>
+                : <Button variant="outline" size="sm" onClick={() => setClosingTask(editing)} disabled={savingEdit}>
+                    <CheckCircle2 className="w-4 h-4 mr-1 text-emerald-600" />Mark as done
+                  </Button>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setEditing(null)} disabled={savingEdit}>Cancel</Button>
+              <Button onClick={handleSaveEdit} disabled={savingEdit}>
+                {savingEdit && <Loader2 className="w-4 h-4 mr-1 animate-spin" />}Save changes
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1452,7 +1799,11 @@ function ServiceDetailTab({ clientId, tab }: { clientId: string; tab: string }) 
   }
 
   const values = draft ?? saved;
-  const dirty = draft !== null && section.fields.some((f) => (draft[f.key] ?? "") !== (saved[f.key] ?? ""));
+  // Compared as JSON, not by identity: the Due Date rule is an object, and
+  // `!==` would call every render dirty the moment one existed.
+  const dirty = draft !== null && section.fields.some(
+    (f) => JSON.stringify(draft[f.key] ?? null) !== JSON.stringify(saved[f.key] ?? null)
+  );
   const set = (key: string, v: unknown) => setDraft({ ...(draft ?? saved), [key]: v });
   // Field-level conditional — e.g. hst_quarter_option only when hst_period is "Quarterly".
   const visibleFields = section.fields.filter((f) => !f.dependsOn || values[f.dependsOn.field] === f.dependsOn.value);
@@ -1473,7 +1824,15 @@ function ServiceDetailTab({ clientId, tab }: { clientId: string; tab: string }) 
             <div key={f.key} className="grid grid-cols-1 sm:grid-cols-[260px_1fr] gap-1 sm:gap-4 text-sm border-b border-border last:border-0 pb-3 last:pb-0">
               <label className="text-muted-foreground pt-2">{f.label}{f.required ? " *" : ""}</label>
               <div>
-                {f.type === "select" ? (
+                {f.type === "duerule" ? (
+                  <>
+                    <DueRuleField
+                      value={values[f.key] as DueRule | null}
+                      onChange={(v) => set(f.key, v)}
+                    />
+                    {f.placeholder && <p className="text-xs text-muted-foreground mt-1.5">{f.placeholder}</p>}
+                  </>
+                ) : f.type === "select" ? (
                   <select
                     className="w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
                     value={String(values[f.key] ?? "")}

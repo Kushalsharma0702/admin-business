@@ -8,9 +8,10 @@ const { buildClientTaskDetails } = require("../task-details-service");
 const { enrichTaskWithConfig, mergeConfigUpdate } = require("../config-fields");
 const { buildDocumentRequirements, validateUploadSlot } = require("../document-requirements");
 const { notifyTaskChange } = require("../notify-task-change");
+const { putObject } = require("../config/aws");
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 router.use(requireAuth("client"));
 
 // A task only becomes visible to the client once its scheduled open_date
@@ -222,10 +223,26 @@ router.get("/:task_id/document-buckets", async (req, res) => {
   const totalSlots = requirements.reduce((n, r) => n + r.quantity, 0);
   const uploadedSlots = requirements.reduce((n, r) => n + r.uploadedCount, 0);
 
+  // When the admin has narrowed the ask to specific outstanding items
+  // ("Partial Data received"), tell the client which ones and why — the same
+  // information the chaser email carries.
+  const meta = safeJson(task.metadata, {});
+  const mdr = meta.missingDataRequest || null;
+  const outstanding = new Set(mdr?.outstandingKeys || []);
+  const annotated = mdr
+    ? requirements.map((r) => ({ ...r, outstanding: outstanding.has(r.key) }))
+    : requirements;
+
   return res.json(ok({
     taskId: task.id,
-    requirements,
-    buckets: requirements, // backward compat alias
+    requirements: annotated,
+    buckets: annotated, // backward compat alias
+    missingDataRequest: mdr && {
+      period: mdr.period ?? null,
+      note: mdr.note ?? null,
+      outstandingKeys: mdr.outstandingKeys || [],
+      requestedAt: mdr.requestedAt ?? null,
+    },
     summary: {
       totalSlots,
       uploadedSlots,
@@ -236,49 +253,111 @@ router.get("/:task_id/document-buckets", async (req, res) => {
 });
 
 // 3.8 POST /v3/api/v1/tasks/:task_id/documents/upload
-router.post("/:task_id/documents/upload", upload.single("file"), async (req, res) => {
-  const task = await findClientTask(req.params.task_id, req.user.sub);
-  if (!task)   return res.status(404).json(fail("Task not found"));
-  if (!req.file) return res.status(400).json(fail("file is required"));
+//
+// Accepts either a single `file` (the long-standing mobile-app contract) or a
+// multi-select batch under `files`. With a batch and no explicit slotIndex,
+// each file lands in the next free slot for that category, so the client can
+// pick several documents at once instead of tapping one slot at a time.
+router.post(
+  "/:task_id/documents/upload",
+  upload.fields([{ name: "file", maxCount: 1 }, { name: "files", maxCount: 50 }]),
+  async (req, res) => {
+    const task = await findClientTask(req.params.task_id, req.user.sub);
+    if (!task) return res.status(404).json(fail("Task not found"));
 
-  const category  = req.body?.category;
-  const slotIndex = Number(req.body?.slotIndex ?? req.body?.slot_index ?? 1);
-  if (!category) return res.status(400).json(fail("category is required"));
+    const files = [...(req.files?.file || []), ...(req.files?.files || [])];
+    if (!files.length) return res.status(400).json(fail("file is required"));
 
-  const slotCheck = validateUploadSlot(task, category, slotIndex);
-  if (!slotCheck.ok) return res.status(400).json(fail(slotCheck.message));
+    const category = req.body?.category;
+    if (!category) return res.status(400).json(fail("category is required"));
 
-  const allowed = ["pdf","jpg","jpeg","png","xls","xlsx","csv","doc","docx"];
-  const ext = req.file.originalname.split(".").pop()?.toLowerCase();
-  if (!allowed.includes(ext)) return res.status(400).json(fail(`Invalid file type. Allowed: ${allowed.join(", ")}`));
+    const rawSlot = req.body?.slotIndex ?? req.body?.slot_index;
+    const baseCheck = validateUploadSlot(task, category, rawSlot ?? 1);
+    if (!baseCheck.ok) return res.status(400).json(fail(baseCheck.message));
 
-  const s3Key = `uploads/${task.client_id}/${task.id}/${category}_slot${slotIndex}_${Date.now()}_${req.file.originalname}`;
+    const allowed = baseCheck.acceptedTypes?.length
+      ? baseCheck.acceptedTypes
+      : ["pdf", "jpg", "jpeg", "png", "xls", "xlsx", "csv", "doc", "docx"];
+    for (const f of files) {
+      const ext = f.originalname.split(".").pop()?.toLowerCase();
+      if (!allowed.includes(ext)) {
+        return res.status(400).json(fail(`Invalid file type .${ext} for ${f.originalname}. Allowed: ${allowed.join(", ")}`));
+      }
+    }
 
-  const { rows: [doc] } = await db.query(
-    `INSERT INTO task_documents
-       (task_id, category, slot_index, file_name, original_filename, file_type, file_size, s3_key, storage_path)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
-     ON CONFLICT (task_id, category, slot_index)
-     DO UPDATE SET
-       file_name=$4, original_filename=$5, file_type=$6, file_size=$7,
-       s3_key=$8, storage_path=$8, uploaded_at=NOW()
-     RETURNING *`,
-    [task.id, category, slotIndex, req.file.originalname, req.file.originalname,
-     req.file.mimetype, req.file.size, s3Key]
-  );
+    // Slots to fill: the explicit one for a single targeted upload, otherwise
+    // the free slots in order. Running out is a 400, not a silent truncation.
+    let targets;
+    if (rawSlot !== undefined && files.length === 1) {
+      targets = [Number(rawSlot)];
+    } else {
+      const { rows: taken } = await db.query(
+        "SELECT slot_index FROM task_documents WHERE task_id=$1 AND category=$2",
+        [task.id, category]
+      );
+      const used = new Set(taken.map((r) => r.slot_index));
+      targets = [];
+      for (let s = 1; s <= baseCheck.requirement.quantity && targets.length < files.length; s++) {
+        if (!used.has(s)) targets.push(s);
+      }
+      if (targets.length < files.length) {
+        return res.status(400).json(fail(
+          `Only ${targets.length} free upload slot(s) left for ${baseCheck.requirement.label} (max ${baseCheck.requirement.quantity})`
+        ));
+      }
+    }
 
-  return res.status(201).json(ok({
-    id:               doc.id,
-    taskId:           task.id,
-    category,
-    slotIndex,
-    fileName:         req.file.originalname,
-    fileType:         req.file.mimetype,
-    fileSize:         req.file.size,
-    status:           "uploaded",
-    uploadedAt:       doc.uploaded_at,
-  }, "Document uploaded"));
-});
+    const uploaded = [];
+    for (const [i, file] of files.entries()) {
+      const slotIndex = targets[i];
+      const s3Key = `uploads/${task.client_id}/${task.id}/${category}_slot${slotIndex}_${Date.now()}_${file.originalname}`;
+
+      // The row used to be written with an s3_key that nothing had ever
+      // uploaded to, so every admin-side download of a client's task document
+      // 404'd at S3. Store the bytes first; fall back to a null key (local dev
+      // with no credentials) rather than recording a key that isn't there.
+      let s3KeyFinal = s3Key;
+      try {
+        await putObject({ key: s3Key, body: file.buffer, contentType: file.mimetype });
+      } catch (err) {
+        console.error(`S3 upload failed for task ${task.id} (${file.originalname}):`, err.message);
+        s3KeyFinal = null;
+      }
+
+      const { rows: [doc] } = await db.query(
+        `INSERT INTO task_documents
+           (task_id, category, slot_index, file_name, original_filename, file_type, file_size, s3_key, storage_path)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
+         ON CONFLICT (task_id, category, slot_index)
+         DO UPDATE SET
+           file_name=$4, original_filename=$5, file_type=$6, file_size=$7,
+           s3_key=$8, storage_path=$8, uploaded_at=NOW()
+         RETURNING *`,
+        [task.id, category, slotIndex, file.originalname, file.originalname,
+         file.mimetype, file.size, s3KeyFinal]
+      );
+
+      uploaded.push({
+        id:         doc.id,
+        taskId:     task.id,
+        category,
+        slotIndex,
+        fileName:   file.originalname,
+        fileType:   file.mimetype,
+        fileSize:   file.size,
+        status:     "uploaded",
+        uploadedAt: doc.uploaded_at,
+      });
+    }
+
+    // Single-file callers (the mobile app today) still get the bare object
+    // they already parse; batches get the array under `documents`.
+    return res.status(201).json(ok(
+      uploaded.length === 1 ? { ...uploaded[0], documents: uploaded } : { documents: uploaded },
+      uploaded.length === 1 ? "Document uploaded" : `${uploaded.length} documents uploaded`
+    ));
+  }
+);
 
 // 3.8b PATCH /v3/api/v1/tasks/:task_id/draft — save partial form response without submitting
 router.patch("/:task_id/draft", async (req, res) => {

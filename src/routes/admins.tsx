@@ -12,7 +12,8 @@ import {
 } from "@/components/ui/dialog";
 import { useAuthStore } from "@/store/useAuthStore";
 import {
-  adminUsersApi, notificationConfigsApi, TASK_TYPES,
+  adminUsersApi, notificationConfigsApi,
+  NOTIFICATION_ROUTING_KEYS, NOTIFICATION_FALLBACKS, DEFAULT_NOTIFICATION_EMAIL,
   type AdminUser, type NotificationConfig, type AuditLogEntry,
 } from "@/lib/api";
 import { Loader2, WifiOff, Plus, ShieldOff, ShieldCheck, ScrollText, Trash2, Ban } from "lucide-react";
@@ -306,14 +307,16 @@ function AdminLogsDialog({ admin, onClose }: { admin: AdminUser | null; onClose:
 // ── Task-type notification routing ────────────────────────────────────────────
 function NotificationConfigsSection() {
   const qc = useQueryClient();
-  const [taskType, setTaskType] = useState<string>(TASK_TYPES[0]);
+  const [taskType, setTaskType] = useState<string>(NOTIFICATION_ROUTING_KEYS[0]);
   const [email, setEmail] = useState("");
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ["notification-configs"],
     queryFn: () => notificationConfigsApi.list(),
+    retry: false,
   });
   const configs: NotificationConfig[] = data?.data ?? [];
+  const configured = new Map(configs.map((c) => [c.taskType, c.email]));
 
   const saveMutation = useMutation({
     mutationFn: () => notificationConfigsApi.save(taskType, email),
@@ -336,26 +339,53 @@ function NotificationConfigsSection() {
 
   return (
     <Card className="p-5">
-      <h3 className="font-semibold">Client-Change Notifications</h3>
+      <h3 className="font-semibold">Admin Notifications</h3>
       <p className="text-xs text-muted-foreground mt-0.5 mb-4">
-        When a client completes or submits a task of a given type, an email is sent to the address below.
-        E.g. HST → a@gmail.com, Payroll → b@gmail.com.
+        Who gets emailed when a client completes something. Task types cover task
+        completion/submission; <code className="text-[11px]">ONBOARDING</code> and{" "}
+        <code className="text-[11px]">CLIENT_TAKE_ON</code> cover those form submissions.
+        Enter several addresses separated by commas. Anything not listed below falls back to{" "}
+        <span className="text-foreground">{DEFAULT_NOTIFICATION_EMAIL}</span>.
       </p>
+
+      {/* A 403 here means the signed-in admin isn't a superadmin. Saying so
+          beats the old silent "No task types routed yet", which looked
+          identical to a working-but-empty screen. */}
+      {isError && (
+        <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          Could not load notification settings: {error instanceof Error ? error.message : "request failed"}.
+          {" "}Only a superadmin can view or change these.
+        </div>
+      )}
 
       <div className="flex flex-wrap items-end gap-2 mb-4">
         <div>
-          <Label className="text-xs uppercase tracking-wide text-muted-foreground">Task type</Label>
+          <Label className="text-xs uppercase tracking-wide text-muted-foreground">Event</Label>
           <select
             className="mt-1 h-9 border border-border rounded-md px-2 text-sm bg-background block"
             value={taskType}
-            onChange={(e) => setTaskType(e.target.value)}
+            onChange={(e) => {
+              setTaskType(e.target.value);
+              setEmail(configured.get(e.target.value) ?? "");
+            }}
           >
-            {TASK_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            {NOTIFICATION_ROUTING_KEYS.map((t) => (
+              <option key={t} value={t}>{t}{configured.has(t) ? " ✓" : ""}</option>
+            ))}
           </select>
         </div>
-        <div className="flex-1 min-w-[220px]">
-          <Label className="text-xs uppercase tracking-wide text-muted-foreground">Notify email</Label>
-          <Input className="mt-1" type="email" placeholder="a@gmail.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <div className="flex-1 min-w-[260px]">
+          <Label className="text-xs uppercase tracking-wide text-muted-foreground">Notify email(s)</Label>
+          <Input
+            className="mt-1"
+            placeholder={NOTIFICATION_FALLBACKS[taskType] ?? DEFAULT_NOTIFICATION_EMAIL}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+          <p className="text-[11px] text-muted-foreground mt-1">
+            Currently: {configured.get(taskType)
+              ?? `${NOTIFICATION_FALLBACKS[taskType] ?? DEFAULT_NOTIFICATION_EMAIL} (default)`}
+          </p>
         </div>
         <Button onClick={() => email.trim() && saveMutation.mutate()} disabled={!email.trim() || saveMutation.isPending}>
           {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}Save
@@ -364,8 +394,10 @@ function NotificationConfigsSection() {
 
       {isLoading ? (
         <div className="flex items-center gap-2 text-muted-foreground py-4 justify-center"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
-      ) : configs.length === 0 ? (
-        <p className="text-sm text-muted-foreground py-4 text-center">No task types routed yet.</p>
+      ) : isError ? null : configs.length === 0 ? (
+        <p className="text-sm text-muted-foreground py-4 text-center">
+          Nothing routed yet — every event is going to its default address.
+        </p>
       ) : (
         <div className="space-y-2">
           {configs.map((c) => (

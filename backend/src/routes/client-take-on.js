@@ -4,6 +4,7 @@ const { fail, ok } = require("../helpers");
 const { requireAuth } = require("../middleware/auth");
 const { sendClientTakeOnCompletedEmail } = require("../config/aws");
 const { generateTasksForClient } = require("../task-generation");
+const { resolveNotificationEmails } = require("../notification-routing");
 
 // Bridges this form's bookkeeping_period/bookkeeping_first_date answers (what
 // the client/staff actually fill in) into the field names schedule.js's
@@ -40,6 +41,12 @@ function bookkeepingConfigFromAnswers(rawAnswers) {
       config.bookkeepingQuarterOption = QUARTER_GROUP_BY_MONTH_MOD3[month % 3];
     }
   }
+  // The Due Date repeat rule chosen on the Bookkeeping tab. Passed through
+  // as-is; schedule.js normalizes and ignores anything it doesn't recognise,
+  // so a cleared/absent rule simply falls back to the standard offsets.
+  if (answers.bookkeeping_due_rule && typeof answers.bookkeeping_due_rule === "object") {
+    config.bookkeepingDueRule = answers.bookkeeping_due_rule;
+  }
   return config;
 }
 
@@ -68,7 +75,12 @@ function recurringConfigFromAnswers(answers) {
   return Object.keys(config).length ? config : null;
 }
 
-const CLIENT_TAKE_ON_NOTIFY_EMAIL = process.env.CLIENT_TAKE_ON_NOTIFY_EMAIL || "admin@diamondaccounts.ca";
+// Who hears about a completed take-on. Routed through the same editable
+// table as every other admin-side notification (Admins → Notifications), so
+// the list can be changed without a deploy; the env var and then
+// accounts@diamondaccounts.ca are the fallbacks when nothing is configured.
+const CLIENT_TAKE_ON_NOTIFY_EMAIL =
+  process.env.CLIENT_TAKE_ON_NOTIFY_EMAIL || "accounts@diamondaccounts.ca";
 
 const CLIENT_TAKE_ON_SCHEMA = {
   version: 1,
@@ -202,8 +214,20 @@ const CLIENT_TAKE_ON_SCHEMA = {
       fields: [
         { key: "bookkeeping_period", label: "Bookkeeping Period", type: "select", options: ["Weekly", "Monthly", "Quarterly", "Yearly"] },
         { key: "bookkeeping_first_date", label: "First Bookkeeping Date", type: "date" },
+        // Repeat rule deciding when each generated bookkeeping task falls due.
+        // Rendered by a dedicated picker (type "duerule"); the stored value is
+        // an object, not a string — see schedule.js's normalizeDueRule.
+        {
+          key: "bookkeeping_due_rule", label: "Due Date", type: "duerule",
+          placeholder: "Leave on the default to keep the standard deadline for this frequency.",
+        },
         { key: "bookkeeping_method", label: "Bookkeeping Method", type: "select", options: ["Paper record", "Spreadsheet", "Desktop", "Online"] },
-        { key: "accounting_software", label: "Accounting Software", type: "select", options: ["Quickbook", "Xero", "Zoho", "VT"] },
+        { key: "accounting_software", label: "Accounting Software", type: "select", options: ["Quickbooks", "Xero", "VT", "Sage", "Others"] },
+        // Only meaningful when "Others" is picked — the renderer hides it otherwise.
+        {
+          key: "accounting_software_other", label: "Accounting Software (please specify)", type: "text",
+          dependsOn: { field: "accounting_software", value: "Others" },
+        },
       ],
     },
     {
@@ -338,12 +362,16 @@ adminRouter.put("/clients/:clientId/client-take-on", async (req, res) => {
 
   // Notify once, on the transition into completed — not on every later edit.
   if (submit && !wasSubmitted) {
-    sendClientTakeOnCompletedEmail({
-      clientName: client.name,
-      clientEmail: client.email,
-      submittedAt: row.submitted_at,
-      toEmail: CLIENT_TAKE_ON_NOTIFY_EMAIL,
-    }).catch((err) => {
+    (async () => {
+      const emails = await resolveNotificationEmails("CLIENT_TAKE_ON", CLIENT_TAKE_ON_NOTIFY_EMAIL);
+      if (!emails.length) return;
+      await sendClientTakeOnCompletedEmail({
+        clientName: client.name,
+        clientEmail: client.email,
+        submittedAt: row.submitted_at,
+        toEmail: emails,
+      });
+    })().catch((err) => {
       console.error("Client take-on completion email failed:", err.message);
     });
   }

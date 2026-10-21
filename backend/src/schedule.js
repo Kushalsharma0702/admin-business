@@ -151,6 +151,120 @@ function hstPeriods(config, today) {
 // effective date itself ("Instantly task created ... based on effective date").
 const BOOKKEEPING_LEAD_MONTHS = { monthly: 1, quarterly: 1, yearly: 3, annual: 3 };
 
+// ── Bookkeeping due-date rule ────────────────────────────────────────────────
+//
+// Each client can override *when* a bookkeeping task falls due with a repeat
+// rule chosen on the Bookkeeping tab (config.bookkeepingDueRule), instead of
+// the fixed period-end offsets above. The rule describes a recurring date;
+// a period's due date is the rule's first occurrence on or after that period
+// ends. Shape (all fields optional except `type`):
+//
+//   { type: "default" | "day" | "week" | "month" | "year",
+//     interval:   1,            // "every N <unit>", >= 1
+//     weekdays:   [2],          // type "week": 0=Sun … 6=Sat
+//     dayOfMonth: 15 | "last",  // type "month"/"year"
+//     month:      1-12 }        // type "year"
+//
+// "default" (or a missing/!unrecognised rule) keeps the existing offsets, so
+// every client configured before this field existed is unaffected.
+//
+// The recurrence is anchored on the client's first bookkeeping date, which is
+// what makes "every 2 weeks" mean anything — without an anchor, only interval
+// 1 would be well defined. Defaults for the unset parts of a rule are read off
+// that same anchor (its weekday / day-of-month / month).
+
+const MAX_DUE_SCAN_DAYS = 800; // ~2 years: beyond any interval the UI offers
+
+function normalizeDueRule(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const type = String(raw.type || "").toLowerCase();
+  if (!["day", "week", "month", "year"].includes(type)) return null; // incl. "default"
+  const interval = Math.max(1, Math.min(52, Number(raw.interval) || 1));
+  const weekdays = Array.isArray(raw.weekdays)
+    ? [...new Set(raw.weekdays.map(Number).filter((d) => d >= 0 && d <= 6))].sort()
+    : [];
+  const dayOfMonth = raw.dayOfMonth === "last" ? "last"
+    : (Number(raw.dayOfMonth) >= 1 && Number(raw.dayOfMonth) <= 31 ? Number(raw.dayOfMonth) : null);
+  const month = Number(raw.month) >= 1 && Number(raw.month) <= 12 ? Number(raw.month) : null;
+  return { type, interval, weekdays, dayOfMonth, month };
+}
+
+function daysBetween(a, b) {
+  return Math.round((b.getTime() - a.getTime()) / 86400000);
+}
+
+// Day-of-month D in a given year/month, clamped to that month's real length so
+// "the 31st" still resolves in February instead of rolling into March.
+function dayInMonth(year, month /*1-12*/, d) {
+  const last = lastDay(year, month);
+  const day = d === "last" ? last : Math.min(d, last);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+// First occurrence of `rule` on or after `from`, anchored at `anchor`.
+// Returns null when the rule can't produce one inside the scan horizon.
+function nextDueOccurrence(rule, from, anchor) {
+  const start = from > anchor ? from : anchor;
+
+  if (rule.type === "day") {
+    const offset = daysBetween(anchor, start);
+    const rem = ((offset % rule.interval) + rule.interval) % rule.interval;
+    return addDays(start, rem === 0 ? 0 : rule.interval - rem);
+  }
+
+  if (rule.type === "week") {
+    const want = rule.weekdays.length ? rule.weekdays : [anchor.getUTCDay()];
+    // Week 0 is the week containing the anchor; weeks are compared from each
+    // week's Sunday so a rule firing Tue/Thu stays inside one interval step.
+    const anchorWeekStart = addDays(anchor, -anchor.getUTCDay());
+    for (let i = 0; i <= MAX_DUE_SCAN_DAYS; i++) {
+      const d = addDays(start, i);
+      if (!want.includes(d.getUTCDay())) continue;
+      const weekIndex = Math.floor(daysBetween(anchorWeekStart, addDays(d, -d.getUTCDay())) / 7);
+      if (weekIndex >= 0 && weekIndex % rule.interval === 0) return d;
+    }
+    return null;
+  }
+
+  if (rule.type === "month") {
+    const dom = rule.dayOfMonth ?? anchor.getUTCDate();
+    const anchorIdx = anchor.getUTCFullYear() * 12 + anchor.getUTCMonth();
+    let idx = start.getUTCFullYear() * 12 + start.getUTCMonth();
+    // Step forward to the next month that lands on the interval grid.
+    const rem = ((idx - anchorIdx) % rule.interval + rule.interval) % rule.interval;
+    if (rem !== 0) idx += rule.interval - rem;
+    for (let i = 0; i < 64; i++, idx += rule.interval) {
+      if (idx < anchorIdx) continue;
+      const d = dayInMonth(Math.floor(idx / 12), (idx % 12) + 1, dom);
+      if (d >= start) return d;
+    }
+    return null;
+  }
+
+  // year
+  const mon = rule.month ?? anchor.getUTCMonth() + 1;
+  const dom = rule.dayOfMonth ?? anchor.getUTCDate();
+  const anchorYear = anchor.getUTCFullYear();
+  let year = start.getUTCFullYear();
+  const rem = ((year - anchorYear) % rule.interval + rule.interval) % rule.interval;
+  if (rem !== 0) year += rule.interval - rem;
+  for (let i = 0; i < 20; i++, year += rule.interval) {
+    if (year < anchorYear) continue;
+    const d = dayInMonth(year, mon, dom);
+    if (d >= start) return d;
+  }
+  return null;
+}
+
+// Due date for one bookkeeping period: the rule's first occurrence on or after
+// the period ends, or `fallbackDue` when no usable rule is configured.
+function bookkeepingDueDate(config, periodEnd, fallbackDue) {
+  const rule = normalizeDueRule(config.bookkeepingDueRule);
+  if (!rule) return fallbackDue;
+  const anchor = config.bookkeepingFirstDate ? parse(config.bookkeepingFirstDate) : periodEnd;
+  return nextDueOccurrence(rule, periodEnd, anchor) || fallbackDue;
+}
+
 // `keyDate` identifies the period and must stay stable — it is the dedup key
 // against tasks already in the database. `periodEnd` is only used to decide
 // whether a period falls after the client's first bookkeeping date; for
@@ -186,16 +300,20 @@ function bookkeepingPeriods(config, today) {
   const lead = BOOKKEEPING_LEAD_MONTHS[freq] ?? 0;
   const all = [];
 
+  // The client's Due Date rule, when set, replaces the per-frequency offset
+  // below; `due(periodEnd, fallback)` resolves whichever applies.
+  const due = (periodEnd, fallback) => bookkeepingDueDate(config, periodEnd, fallback);
+
   if (freq === "quarterly") {
     const months = quarterMonths(config.bookkeepingQuarterOption);
     if (months) for (const y of candidateYears(today)) for (const m of months) {
       const qe = monthEnd(y, m);
-      all.push(bkPeriod(qe, addMonths(qe, -lead), addMonths(qe, 3)));
+      all.push(bkPeriod(qe, addMonths(qe, -lead), due(qe, addMonths(qe, 3))));
     }
   } else if (freq === "monthly") {
     for (const y of candidateYears(today)) for (let m = 1; m <= 12; m++) {
       const me = monthEnd(y, m);
-      all.push(bkPeriod(me, addMonths(me, -lead), addMonths(me, 1)));
+      all.push(bkPeriod(me, addMonths(me, -lead), due(me, addMonths(me, 1))));
     }
   } else if (freq === "yearly" || freq === "annual") {
     // The client's first bookkeeping date acts as the year-end anchor, the same
@@ -203,7 +321,7 @@ function bookkeepingPeriods(config, today) {
     if (!start) return [];
     for (const y of candidateYears(today)) {
       const ye = safeYearEnd(start, y);
-      all.push(bkPeriod(ye, addMonths(ye, -lead), addMonths(ye, 3)));
+      all.push(bkPeriod(ye, addMonths(ye, -lead), due(ye, addMonths(ye, 3))));
     }
   } else if (freq === "weekly") {
     // Anchored to the weekday of the client's chosen effective date, so
@@ -212,7 +330,8 @@ function bookkeepingPeriods(config, today) {
     const anchorDow = start ? start.getUTCDay() : 5;
     let d = new Date(today);
     while (d.getUTCDay() !== anchorDow) d = addDays(d, -1);
-    all.push(bkPeriod(d, d, addDays(d, 6), addDays(d, 6)));
+    const weekEnd = addDays(d, 6);
+    all.push(bkPeriod(d, d, due(weekEnd, weekEnd), weekEnd));
   } else {
     return [];
   }
@@ -257,4 +376,5 @@ module.exports = {
   addMonths, firstOfMonth, monthEnd, safeYearEnd, ymd, parse, addDays,
   computeDatesForTask, planFilingTasks,
   t2Periods, hstPeriods, bookkeepingPeriods, installmentPeriods,
+  normalizeDueRule, nextDueOccurrence, bookkeepingDueDate,
 };

@@ -22,6 +22,8 @@ export const ADMIN_STATUSES = [
   "Sent for Approval to support team",
   "Sent for Approval to client",
   "Approval received",
+  "Send for automation",
+  "Received from automation",
   "Filed",
 ] as const;
 
@@ -39,12 +41,50 @@ export const TASK_TYPES = [
 ] as const;
 
 export type TaskType = (typeof TASK_TYPES)[number];
+
+/**
+ * Keys the notification-routing table accepts. A superset of TASK_TYPES:
+ * task_type there is a free string, so admin-side events that aren't tasks
+ * (onboarding / client take-on completion) are routed through the same table
+ * and are editable from the same screen.
+ */
+export const NOTIFICATION_ROUTING_KEYS = [
+  ...TASK_TYPES.filter((t) => t !== "ONBOARDING"),
+  "ONBOARDING",
+  "CLIENT_TAKE_ON",
+] as const;
+
+/** Where a routing key's email goes when nothing is configured for it. */
+export const NOTIFICATION_FALLBACKS: Record<string, string> = {
+  ONBOARDING: "support@diamondaccounts.ca, accounts@diamondaccounts.ca, admin@diamondaccounts.ca",
+  CLIENT_TAKE_ON: "accounts@diamondaccounts.ca",
+};
+export const DEFAULT_NOTIFICATION_EMAIL = "accounts@diamondaccounts.ca";
 export type TaskPriority = "high" | "medium" | "low" | "none";
+
+/** Repeat rule deciding when a generated bookkeeping task falls due. */
+export type DueRule = {
+  type: "default" | "day" | "week" | "month" | "year";
+  interval?: number;
+  /** type "week": 0=Sun … 6=Sat */
+  weekdays?: number[];
+  /** type "month" / "year" */
+  dayOfMonth?: number | "last";
+  /** type "year", 1-12 */
+  month?: number;
+};
 
 export interface ApiTask {
   id: string;
   clientId: string;
   assignedBy: string | null;
+  /** Owning staff member — distinct from assignedBy (who gave it to the client). */
+  assignedTo: string | null;
+  assignedToName: string | null;
+  /** Admin-side "done". Independent of status/completedAt, which are the client's. */
+  closedAt: string | null;
+  closedBy: string | null;
+  closedByName: string | null;
   title: string;
   description: string | null;
   instructions: string | null;
@@ -393,28 +433,43 @@ export const tasksApi = {
   },
   listForClient: (clientId: string) =>
     request<{ success: boolean; data: ApiTask[] }>(`/api/admin/clients/${clientId}/tasks`),
+  /** Active (`closed:false`) or Closed (`closed:true`) half of a client's tasks, paged. */
+  listForClientByState: (clientId: string, closed: boolean, page = 1, per_page = 10) =>
+    request<{ success: boolean; data: ApiTask[]; pagination: { page: number; per_page: number; total_items: number; total_pages: number } }>(
+      `/api/admin/clients/${clientId}/tasks?closed=${closed}&page=${page}&per_page=${per_page}`
+    ),
   create: (clientId: string, body: {
     title?: string; description?: string; instructions?: string;
     taskType?: TaskType | string;
     selectedSubtasks?: string[];
     priority?: TaskPriority;
     adminStatus?: AdminStatus | string;
+    assignedTo?: string | null;
     config?: Record<string, unknown>; metadata?: object;
     formFields?: ConfigFieldDef[];
     documentRequirements?: { key: string; quantity: number }[];
+    documentRequests?: Partial<TaskDocRequest>[];
     taxYear?: number; dueDate?: string; openDate?: string;
   }) =>
     request<{ success: boolean; data: ApiTaskWithConfig }>(`/api/admin/clients/${clientId}/tasks`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  update: (taskId: string, body: { adminStatus?: string; title?: string; description?: string | null; status?: string; dueDate?: string | null; openDate?: string | null; config?: Record<string, unknown>; documentRequirements?: { key: string; quantity: number }[]; metadata?: object }) =>
+  update: (taskId: string, body: { adminStatus?: string; title?: string; description?: string | null; status?: string; dueDate?: string | null; openDate?: string | null; assignedTo?: string | null; config?: Record<string, unknown>; documentRequirements?: { key: string; quantity: number }[]; documentRequests?: Partial<TaskDocRequest>[]; metadata?: object }) =>
     request<{ success: boolean; data: ApiTaskWithConfig }>(`/api/admin/tasks/${taskId}`, {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
   delete: (taskId: string) =>
     request<{ success: boolean }>(`/api/admin/tasks/${taskId}`, { method: "DELETE" }),
+
+  /** Admin-side "mark as done" — moves the task to Closed without touching the client's status. */
+  close: (taskId: string, note?: string) =>
+    request<{ success: boolean; data: ApiTask }>(`/api/admin/tasks/${taskId}/close`, {
+      method: "POST", body: JSON.stringify({ note }),
+    }),
+  reopen: (taskId: string) =>
+    request<{ success: boolean; data: ApiTask }>(`/api/admin/tasks/${taskId}/reopen`, { method: "POST" }),
 
   advanceSubtask: (taskId: string, subtaskName: string) =>
     request<{ success: boolean; data: { taskId: string; previousSubtask: string; currentSubtask: string; previousProgress: string; clientProgress: string; taskStatus: string; isTerminal: boolean } }>(`/api/admin/tasks/${taskId}/subtask`, {
@@ -676,6 +731,112 @@ export const taskDetailApi = {
     request<{ success: boolean; data: { downloadUrl: string; fileName: string } }>(
       `/api/admin/attachments/${attachmentId}/download`
     ),
+};
+
+// ─── Admin — Task document requests + the client's uploads against them ─────
+//
+// Same shape as GeneralDocField, but configured per task rather than per
+// client, and stored in tasks.metadata.documentRequests. Asking for the same
+// kind of document twice is the point: two "Business Bank Statements" rows
+// (…0010 and …0547) are two independent requests with their own keys.
+export type TaskDocRequest = {
+  key: string;
+  name: string;
+  placeholder: string;
+  required: boolean;
+  maxCount: number;
+  acceptedTypes: string[];
+  notes: string;
+  displayOrder: number;
+};
+
+export type TaskDocRequirement = TaskDocRequest & {
+  label: string;
+  category: string;
+  quantity: number;
+  uploadedCount: number;
+  pendingCount: number;
+  slots: Array<{
+    slotIndex: number;
+    label: string;
+    status: "uploaded" | "pending";
+    uploadedFile: { id: string; fileName: string; fileSize: number; fileType: string | null; uploadedAt: string } | null;
+  }>;
+};
+
+export type TaskDocUpload = {
+  id: string;
+  category: string;
+  slotIndex: number;
+  fileName: string;
+  originalFilename: string;
+  fileType: string | null;
+  fileSize: number;
+  hasFile: boolean;
+  uploadedAt: string;
+};
+
+/**
+ * Narrowed ask recorded once some documents have arrived (admin_status
+ * "Partial Data received"): which requests are still outstanding, for which
+ * period, and the note the client sees. Chaser emails switch wording once set.
+ */
+export type MissingDataRequest = {
+  period: string | null;
+  note: string | null;
+  outstandingKeys: string[];
+  requestedAt: string | null;
+  requestedByName?: string | null;
+};
+
+export const taskDocsApi = {
+  get: (taskId: string) =>
+    request<{ success: boolean; data: { taskId: string; requirements: TaskDocRequirement[]; uploads: TaskDocUpload[]; uploadCount: number; missingDataRequest: MissingDataRequest | null } }>(
+      `/api/admin/tasks/${taskId}/documents`
+    ),
+  saveMissingDataRequest: (taskId: string, body: { period?: string; note?: string; outstandingKeys?: string[]; sendEmail?: boolean }) =>
+    request<{ success: boolean; message: string; data: ApiTask & { missingDataRequest: MissingDataRequest; emailed: boolean; emailError: string | null } }>(
+      `/api/admin/tasks/${taskId}/missing-data-request`,
+      { method: "POST", body: JSON.stringify(body) }
+    ),
+  clearMissingDataRequest: (taskId: string) =>
+    request<{ success: boolean; data: ApiTask }>(
+      `/api/admin/tasks/${taskId}/missing-data-request`, { method: "DELETE" }
+    ),
+  getDownloadUrl: (documentId: string, forceDownload = false) =>
+    request<{ success: boolean; data: { downloadUrl: string; fileName: string } }>(
+      `/api/admin/task-documents/${documentId}/download${forceDownload ? "?download=1" : ""}`
+    ),
+  /** Archive URL. The route streams a zip, so it is opened directly rather than fetched as JSON. */
+  archiveUrl: (taskId: string) => `${API_BASE}/api/admin/tasks/${taskId}/documents/archive`,
+  /**
+   * The archive route needs the Authorization header, which a plain
+   * window.open can't send — fetch it as a blob and save that instead.
+   */
+  downloadArchive: async (taskId: string, suggestedName: string) => {
+    const res = await fetch(taskDocsApi.archiveUrl(taskId), {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    });
+    if (!res.ok) {
+      const msg = await res.json().catch(() => null);
+      throw new Error(msg?.message ?? "Could not build the archive");
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = suggestedName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+};
+
+// ─── Admin — Assignable staff ────────────────────────────────────────────────
+export type AssignableAdmin = { id: string; name: string; email: string };
+export const assignableAdminsApi = {
+  list: () => request<{ success: boolean; data: AssignableAdmin[] }>("/api/admin/assignable-admins"),
 };
 
 // ─── Admin — On-Boarding Details ─────────────────────────────────────────────

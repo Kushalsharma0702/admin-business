@@ -108,7 +108,8 @@ async function sendClientTakeOnCompletedEmail({
   clientName,
   clientEmail,
   submittedAt,
-  toEmail = "admin@diamondaccounts.ca",
+  // Accepts a single address or a list — admin-side routing resolves to a list.
+  toEmail = "accounts@diamondaccounts.ca",
 }) {
   const when = submittedAt ? new Date(submittedAt).toLocaleString() : new Date().toLocaleString();
   const htmlBody = `
@@ -138,7 +139,7 @@ async function sendClientTakeOnCompletedEmail({
 
   const cmd = new SendEmailCommand({
     Source: `${env.SES_FROM_NAME} <${env.SES_FROM_EMAIL}>`,
-    Destination: { ToAddresses: [toEmail] },
+    Destination: { ToAddresses: Array.isArray(toEmail) ? toEmail : [toEmail] },
     Message: {
       Subject: { Data: "Client Take-On Completed" },
       Body: {
@@ -237,8 +238,25 @@ async function sendTaskChangeNotification({
 // Data request / chaser email — sent to the CLIENT asking them to provide the
 // information/documents for a recurring task (bookkeeping, etc). isChaser
 // distinguishes the first request from reminders for subject-line clarity.
-async function sendDataRequestEmail({ toEmail, clientName, taskTitle, taskType, isChaser }) {
-  const heading = isChaser ? "Reminder: We're still waiting on your information" : "We need your information";
+// `isMissingData` switches the copy once the client has sent *some* of what
+// was asked for (admin_status "Partial Data received"): from "please send your
+// documents" to "we are still missing the items below", optionally naming the
+// period and the admin's note from the missing-data request.
+async function sendDataRequestEmail({
+  toEmail, clientName, taskTitle, taskType, isChaser,
+  isMissingData = false, missingDataNote = null, missingDataPeriod = null,
+}) {
+  const heading = isMissingData
+    ? "We're still missing some of your information"
+    : isChaser
+      ? "Reminder: We're still waiting on your information"
+      : "We need your information";
+  const periodLine = missingDataPeriod
+    ? `<p style="color:#475569">Period: <strong>${missingDataPeriod}</strong></p>` : "";
+  const noteLine = missingDataNote
+    ? `<div style="background:#eef2ff;border-left:3px solid #4f46e5;padding:12px 14px;margin:16px 0">
+         <p style="color:#1e293b;margin:0;font-size:14px;white-space:pre-wrap">${missingDataNote}</p>
+       </div>` : "";
   const htmlBody = `
     <div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px">
       <div style="background:#4f46e5;padding:20px 24px;border-radius:8px 8px 0 0">
@@ -248,23 +266,36 @@ async function sendDataRequestEmail({ toEmail, clientName, taskTitle, taskType, 
         <h2 style="color:#1e293b;margin-top:0">${heading}</h2>
         <p style="color:#475569">Hi ${clientName || "there"},</p>
         <p style="color:#475569">
-          ${isChaser
-            ? `This is a reminder that we still need your information for <strong>${taskTitle || taskType}</strong> to continue your bookkeeping.`
-            : `Please provide your information/documents for <strong>${taskTitle || taskType}</strong> so we can proceed with your bookkeeping.`}
+          ${isMissingData
+            ? `Thank you for what you have sent so far for <strong>${taskTitle || taskType}</strong>. We still need a few outstanding items before we can complete it.`
+            : isChaser
+              ? `This is a reminder that we still need your information for <strong>${taskTitle || taskType}</strong> to continue your bookkeeping.`
+              : `Please provide your information/documents for <strong>${taskTitle || taskType}</strong> so we can proceed with your bookkeeping.`}
         </p>
+        ${periodLine}
+        ${noteLine}
         <p style="color:#475569;font-size:13px">Log in to your client portal to upload what's needed.</p>
       </div>
     </div>
   `;
-  const textBody = `${heading}\n\nHi ${clientName || "there"},\n\n${isChaser
-    ? `This is a reminder that we still need your information for ${taskTitle || taskType}.`
-    : `Please provide your information/documents for ${taskTitle || taskType}.`}`;
+  const textBody = [
+    heading, "", `Hi ${clientName || "there"},`, "",
+    isMissingData
+      ? `Thank you for what you have sent so far for ${taskTitle || taskType}. We still need a few outstanding items.`
+      : isChaser
+        ? `This is a reminder that we still need your information for ${taskTitle || taskType}.`
+        : `Please provide your information/documents for ${taskTitle || taskType}.`,
+    missingDataPeriod ? `\nPeriod: ${missingDataPeriod}` : "",
+    missingDataNote ? `\n${missingDataNote}` : "",
+  ].filter(Boolean).join("\n");
 
   const cmd = new SendEmailCommand({
     Source: `${env.SES_FROM_NAME} <${env.SES_FROM_EMAIL}>`,
     Destination: { ToAddresses: [toEmail] },
     Message: {
-      Subject: { Data: `${isChaser ? "Reminder: " : ""}Information Needed — ${taskTitle || taskType}` },
+      Subject: { Data: isMissingData
+        ? `Outstanding Information — ${taskTitle || taskType}`
+        : `${isChaser ? "Reminder: " : ""}Information Needed — ${taskTitle || taskType}` },
       Body: { Html: { Data: htmlBody, Charset: "UTF-8" }, Text: { Data: textBody, Charset: "UTF-8" } },
     },
   });
@@ -372,6 +403,16 @@ async function getDownloadUrl({ bucket, key, expiresIn = 3600, forceDownload = f
   return getSignedUrl(s3, cmd, { expiresIn });
 }
 
+// Pulls an object's bytes into memory. Used by the "download all documents as
+// a zip" route, which has to read the files server-side rather than hand the
+// browser a pile of presigned URLs.
+async function getObjectBuffer({ bucket, key }) {
+  const out = await s3.send(new GetObjectCommand({ Bucket: bucket || env.S3_BUCKET, Key: key }));
+  const chunks = [];
+  for await (const chunk of out.Body) chunks.push(chunk);
+  return Buffer.concat(chunks);
+}
+
 async function putObject({ bucket, key, body, contentType }) {
   const cmd = new PutObjectCommand({
     Bucket: bucket || env.S3_BUCKET,
@@ -394,6 +435,7 @@ module.exports = {
   sendQueryReminderEmail,
   getPresignedUploadUrl,
   getDownloadUrl,
+  getObjectBuffer,
   putObject,
   buildS3Key,
 };

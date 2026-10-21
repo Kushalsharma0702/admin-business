@@ -28,9 +28,17 @@ router.get("/notification-configs", async (_req, res) => {
 // body: { email }
 router.put("/notification-configs/:taskType", async (req, res) => {
   const taskType = req.params.taskType.trim().toUpperCase();
-  const email = (req.body?.email || "").trim();
   if (!taskType) return res.status(400).json(fail("taskType is required"));
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json(fail("A valid email is required"));
+
+  // One address or several, comma-separated. resolveNotificationEmails has
+  // always split this column on commas; the single-address regex here meant a
+  // multi-recipient list could never actually be saved through the UI.
+  const raw = String(req.body?.email || "");
+  const emails = [...new Set(raw.split(",").map((e) => e.trim()).filter(Boolean))];
+  if (!emails.length) return res.status(400).json(fail("At least one email address is required"));
+  const invalid = emails.filter((e) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+  if (invalid.length) return res.status(400).json(fail(`Not a valid email address: ${invalid.join(", ")}`));
+  const email = emails.join(", ");
 
   const { rows: [row] } = await db.query(
     `INSERT INTO task_type_notification_configs (task_type, email, updated_by)

@@ -45,6 +45,15 @@ function formatTask(row) {
     id:                row.id,
     clientId:          row.client_id,
     assignedBy:        row.assigned_by ?? null,
+    // Owning staff member (020). Distinct from assignedBy, which records who
+    // handed the task to the client.
+    assignedTo:        row.assigned_to ?? null,
+    assignedToName:    row.assigned_to_name ?? null,
+    // Admin-side "done" — deliberately not the same as status/completedAt,
+    // which mean the client finished their part.
+    closedAt:          row.closed_at ?? null,
+    closedBy:          row.closed_by ?? null,
+    closedByName:      row.closed_by_name ?? null,
     templateId:        row.template_id ?? null,
     templateVersionId: row.template_version_id ?? null,
     title:             row.title,

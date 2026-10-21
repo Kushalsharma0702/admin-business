@@ -3,12 +3,17 @@ const express = require("express");
 const db = require("../db");
 const { fail, ok, paged, formatTask, formatUser, hashPassword, generateInviteToken, safeJson } = require("../helpers");
 const { requireAuth } = require("../middleware/auth");
-const { sendInviteEmail } = require("../config/aws");
+const { sendInviteEmail, getDownloadUrl, getObjectBuffer, sendDataRequestEmail } = require("../config/aws");
 const env = require("../config/env");
 const { TASK_TYPES, WORKFLOWS, getWorkflow, getAllClientProgressValues } = require("../workflows");
 const { initializeSubtasks, advanceToSubtask, getSubtasks, getActivityLog, logActivity } = require("../workflow-service");
 const { enrichTaskWithConfig, mergeConfigUpdate, getConfigSchemaForTaskType } = require("../config-fields");
-const { DOCUMENT_CATALOG, normalizeDocumentRequirements } = require("../document-requirements");
+const {
+  DOCUMENT_CATALOG, REQUEST_FILE_TYPES,
+  normalizeDocumentRequirements, normalizeDocumentRequests, buildDocumentRequirements,
+  getDocumentRequirementsFromTask,
+} = require("../document-requirements");
+const { buildZip } = require("../zip");
 const schedule = require("../schedule");
 const { generateTasksForClient } = require("../task-generation");
 
@@ -17,11 +22,30 @@ const ADMIN_STATUSES = [
   "Data Missing Closed", "Work in Progress", "Query sent to Support team",
   "Query sent to client", "Partial Query received", "Review",
   "Sent for Approval to support team", "Sent for Approval to client",
-  "Approval received", "Filed",
+  "Approval received", "Send for automation", "Received from automation", "Filed",
 ];
 
 const router = express.Router();
 router.use(requireAuth("admin"));
+
+// Assignee resolution: "" / null clears it, a uuid must belong to an active
+// admin. Sentinel rather than a throw so the callers can return a clean 400.
+const INVALID_ASSIGNEE = Symbol("invalid-assignee");
+
+// The document-request keys a task actually asks for — the allowed set for a
+// missing-data request's outstanding items.
+function buildRequestKeys(task) {
+  return getDocumentRequirementsFromTask(task).map((r) => r.key);
+}
+
+async function resolveAssignee(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const { rows } = await db.query(
+    "SELECT id FROM users WHERE id::text=$1 AND role IN ('admin','superadmin') AND is_active = TRUE",
+    [String(value)]
+  );
+  return rows[0] ? rows[0].id : INVALID_ASSIGNEE;
+}
 
 // ── Meta ──────────────────────────────────────────────────────────────────────
 const { getWorkflowMetadata } = require("../workflow-metadata");
@@ -312,6 +336,13 @@ router.get("/tasks", async (req, res) => {
   ));
 });
 
+// GET /api/admin/clients/:clientId/tasks
+//
+// Default (no `closed` param) returns every task, unpaged — the long-standing
+// contract this endpoint's callers rely on. The client detail screen asks for
+// the two halves separately instead: `?closed=false` for the Active table and
+// `?closed=true&page=N` for the Closed table, which pages so a client with
+// years of history stays cheap to open while old rows remain reachable.
 router.get("/clients/:clientId/tasks", async (req, res) => {
   const { rows: [client] } = await db.query(
     "SELECT id FROM users WHERE (id::text=$1 OR slug=$1) AND role='client'",
@@ -319,11 +350,48 @@ router.get("/clients/:clientId/tasks", async (req, res) => {
   );
   if (!client) return res.status(404).json(fail("Client not found"));
 
+  const SELECT = `
+    SELECT t.*, a.name AS assigned_to_name, c.name AS closed_by_name
+    FROM tasks t
+    LEFT JOIN users a ON t.assigned_to = a.id
+    LEFT JOIN users c ON t.closed_by   = c.id`;
+
+  const closedParam = req.query.closed;
+  if (closedParam === undefined) {
+    const { rows } = await db.query(
+      `${SELECT} WHERE t.client_id=$1 ORDER BY t.created_at DESC`, [client.id]);
+    return res.json(ok(rows.map(formatTask), "Client tasks fetched"));
+  }
+
+  const wantClosed = closedParam === "true" || closedParam === "1";
+  const page     = Math.max(1, Number(req.query.page || 1));
+  const per_page = Math.max(1, Math.min(100, Number(req.query.per_page || 10)));
+  const offset   = (page - 1) * per_page;
+  const filter   = wantClosed ? "t.closed_at IS NOT NULL" : "t.closed_at IS NULL";
+  // Closed reads newest-closed first; active keeps the existing newest-created order.
+  const order    = wantClosed ? "t.closed_at DESC" : "t.created_at DESC";
+
+  const [{ rows }, { rows: cnt }] = await Promise.all([
+    db.query(`${SELECT} WHERE t.client_id=$1 AND ${filter} ORDER BY ${order} LIMIT $2 OFFSET $3`,
+      [client.id, per_page, offset]),
+    db.query(`SELECT COUNT(*)::int AS total FROM tasks t WHERE t.client_id=$1 AND ${filter}`,
+      [client.id]),
+  ]);
+
+  return res.json(paged(rows.map(formatTask), "Client tasks fetched", page, per_page, cnt[0].total));
+});
+
+// GET /api/admin/assignable-admins
+// Staff a task can be assigned to. Separate from the superadmin-only
+// /api/admin/admins roster: every admin needs to be able to pick an assignee,
+// but only a superadmin may see or change permissions and audit history.
+router.get("/assignable-admins", async (_req, res) => {
   const { rows } = await db.query(
-    "SELECT * FROM tasks WHERE client_id=$1 ORDER BY created_at DESC",
-    [client.id]
+    `SELECT id, name, email FROM users
+     WHERE role IN ('admin','superadmin') AND is_active = TRUE
+     ORDER BY name ASC`
   );
-  return res.json(ok(rows.map(formatTask), "Client tasks fetched"));
+  return res.json(ok(rows, "Assignable admins fetched"));
 });
 
 router.post("/clients/:clientId/tasks", async (req, res) => {
@@ -355,6 +423,12 @@ router.post("/clients/:clientId/tasks", async (req, res) => {
   if (b.documentRequirements) {
     metadata.documentRequirements = normalizeDocumentRequirements(b.documentRequirements);
   }
+  if (b.documentRequests) {
+    metadata.documentRequests = normalizeDocumentRequests(b.documentRequests);
+  }
+
+  const assignedTo = await resolveAssignee(b.assignedTo);
+  if (assignedTo === INVALID_ASSIGNEE) return res.status(400).json(fail("assignedTo is not an active admin"));
 
   const adminStatus = b.adminStatus && ADMIN_STATUSES.includes(b.adminStatus)
     ? b.adminStatus
@@ -383,13 +457,13 @@ router.post("/clients/:clientId/tasks", async (req, res) => {
 
   const { rows: [task] } = await db.query(
     `INSERT INTO tasks
-       (client_id, assigned_by, template_id, template_version_id,
+       (client_id, assigned_by, assigned_to, template_id, template_version_id,
         title, description, instructions, task_type, admin_status, metadata, config,
         tax_year, due_date, open_date, priority)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
      RETURNING *`,
     [
-      client.id, req.user.sub,
+      client.id, req.user.sub, assignedTo,
       b.templateId || null, b.templateVersionId || null,
       title, b.description || null, instructions,
       taskType,
@@ -462,17 +536,26 @@ router.patch("/tasks/:taskId", async (req, res) => {
       vals.push(DATE_COLS.has(snake) && !b[camel] ? null : b[camel]);
     }
   }
+  if ("assignedTo" in b) {
+    const assignedTo = await resolveAssignee(b.assignedTo);
+    if (assignedTo === INVALID_ASSIGNEE) return res.status(400).json(fail("assignedTo is not an active admin"));
+    sets.push(`assigned_to=$${i++}`);
+    vals.push(assignedTo);
+  }
   if ("config" in b) {
     sets.push(`config=$${i++}`);
     vals.push(JSON.stringify(mergeConfigUpdate(
       existing.task_type, safeJson(existing.config, {}), b.config
     )));
   }
-  if ("documentRequirements" in b || b.metadata) {
+  if ("documentRequirements" in b || "documentRequests" in b || b.metadata) {
     const curMeta = safeJson(existing.metadata, {});
     const newMeta = { ...curMeta, ...(b.metadata || {}) };
     if ("documentRequirements" in b) {
       newMeta.documentRequirements = normalizeDocumentRequirements(b.documentRequirements);
+    }
+    if ("documentRequests" in b) {
+      newMeta.documentRequests = normalizeDocumentRequests(b.documentRequests);
     }
     sets.push(`metadata=$${i++}`);
     vals.push(JSON.stringify(newMeta));
@@ -492,14 +575,65 @@ router.patch("/tasks/:taskId", async (req, res) => {
   if ("openDate" in b && (b.openDate || null) !== existing.open_date) changes.push(`open date → ${b.openDate || "(cleared)"}`);
   if ("description" in b && b.description !== existing.description) changes.push("description updated");
   if ("config" in b) changes.push("details updated");
+  if ("documentRequests" in b) changes.push("document requests updated");
+  if ("assignedTo" in b && (updated.assigned_to || null) !== (existing.assigned_to || null)) {
+    const { rows: [who] } = await db.query("SELECT name FROM users WHERE id=$1", [updated.assigned_to]);
+    changes.push(`assignee → ${who?.name || "(unassigned)"}`);
+  }
   if (changes.length) {
     await logActivity(updated.id, "task_edited", req.user.sub, changes.join("; "));
   }
 
+  // Re-read with the assignee/closer names joined on, so the caller's cache
+  // gets the same shape the list endpoint returns.
+  const { rows: [withNames] } = await db.query(
+    `SELECT t.*, a.name AS assigned_to_name, c.name AS closed_by_name
+     FROM tasks t LEFT JOIN users a ON t.assigned_to=a.id LEFT JOIN users c ON t.closed_by=c.id
+     WHERE t.id=$1`,
+    [updated.id]
+  );
+
   return res.json(ok({
-    ...formatTask(updated),
+    ...formatTask(withNames || updated),
     ...enrichTaskWithConfig(updated, safeJson(updated.config, {})),
   }, "Task updated"));
+});
+
+// POST /api/admin/tasks/:taskId/close — the Tasks tab's "Mark as done".
+//
+// Admin-side only: it records closed_at/closed_by and moves the row into the
+// Closed table. It deliberately does NOT touch `status`/`completed_at`, which
+// mean "the client finished their part" and drive what the Flutter app shows
+// — closing a task the client never submitted must not read back to them as
+// something they completed.
+router.post("/tasks/:taskId/close", async (req, res) => {
+  const { rows: [task] } = await db.query("SELECT * FROM tasks WHERE id=$1", [req.params.taskId]);
+  if (!task) return res.status(404).json(fail("Task not found"));
+  if (task.closed_at) return res.status(409).json(fail("Task is already closed"));
+
+  const note = (req.body?.note || "").trim() || null;
+  const { rows: [updated] } = await db.query(
+    "UPDATE tasks SET closed_at=NOW(), closed_by=$1, updated_at=NOW() WHERE id=$2 RETURNING *",
+    [req.user.sub, task.id]
+  );
+  await logActivity(task.id, "task_closed", req.user.sub, note ? `Marked done — ${note}` : "Marked done");
+
+  return res.json(ok(formatTask(updated), "Task marked as done"));
+});
+
+// POST /api/admin/tasks/:taskId/reopen — undo a close.
+router.post("/tasks/:taskId/reopen", async (req, res) => {
+  const { rows: [task] } = await db.query("SELECT * FROM tasks WHERE id=$1", [req.params.taskId]);
+  if (!task) return res.status(404).json(fail("Task not found"));
+  if (!task.closed_at) return res.status(409).json(fail("Task is not closed"));
+
+  const { rows: [updated] } = await db.query(
+    "UPDATE tasks SET closed_at=NULL, closed_by=NULL, updated_at=NOW() WHERE id=$1 RETURNING *",
+    [task.id]
+  );
+  await logActivity(task.id, "task_reopened", req.user.sub, "Reopened");
+
+  return res.json(ok(formatTask(updated), "Task reopened"));
 });
 
 router.patch("/tasks/:taskId/reassign", async (req, res) => {
@@ -565,6 +699,220 @@ router.get("/tasks/:taskId/activity", async (req, res) => {
 
   const log = await getActivityLog(task.id);
   return res.json(ok(log, "Activity log fetched"));
+});
+
+// ── Missing-data request (admin_status "Partial Data received") ─────────────
+//
+// Once some documents have arrived, the admin narrows the ask: which of the
+// task's existing document requests are still outstanding, for which period,
+// plus a note to the client. Stored on the task so the chaser emails can
+// switch from "send us your documents" to "we are still missing these"
+// (see chaser-scheduler.js / sendDataRequestEmail).
+
+// POST /api/admin/tasks/:taskId/missing-data-request
+// body: { period?, note?, outstandingKeys?: string[], sendEmail?: boolean }
+router.post("/tasks/:taskId/missing-data-request", async (req, res) => {
+  const { rows: [task] } = await db.query("SELECT * FROM tasks WHERE id=$1", [req.params.taskId]);
+  if (!task) return res.status(404).json(fail("Task not found"));
+
+  const b = req.body || {};
+  const period = String(b.period || "").trim() || null;
+  const note = String(b.note || "").trim() || null;
+
+  // Outstanding items must name requests the task actually has, otherwise the
+  // client would be chased for something never asked of them.
+  const configured = new Set(buildRequestKeys(task));
+  const outstandingKeys = Array.isArray(b.outstandingKeys)
+    ? [...new Set(b.outstandingKeys.map(String).filter((k) => configured.has(k)))]
+    : [];
+
+  if (!period && !note && !outstandingKeys.length) {
+    return res.status(400).json(fail("Give at least a period, a note, or the outstanding documents"));
+  }
+
+  const meta = safeJson(task.metadata, {});
+  meta.missingDataRequest = {
+    period, note, outstandingKeys,
+    requestedAt: new Date().toISOString(),
+    requestedBy: req.user.sub,
+    requestedByName: req.user.name || null,
+  };
+
+  // Recording a missing-data request IS the "partial data" state — set it here
+  // so the chasers pick up the new wording without a second manual step.
+  const { rows: [updated] } = await db.query(
+    "UPDATE tasks SET metadata=$1, admin_status='Partial Data received', updated_at=NOW() WHERE id=$2 RETURNING *",
+    [JSON.stringify(meta), task.id]
+  );
+
+  await logActivity(task.id, "missing_data_requested", req.user.sub,
+    [period && `period ${period}`, outstandingKeys.length && `${outstandingKeys.length} document(s)`, note && "note added"]
+      .filter(Boolean).join("; ") || "Missing-data request recorded");
+
+  // Optional immediate send — otherwise the hourly chaser picks it up inside
+  // the next Atlantic send window.
+  let emailed = false;
+  let emailError = null;
+  if (b.sendEmail) {
+    const { rows: [client] } = await db.query("SELECT name, email FROM users WHERE id=$1", [task.client_id]);
+    if (!client?.email) {
+      emailError = "This client has no email address on file";
+    } else {
+      try {
+        await sendDataRequestEmail({
+          toEmail: client.email, clientName: client.name,
+          taskTitle: task.title, taskType: task.task_type,
+          isChaser: true, isMissingData: true,
+          missingDataNote: note, missingDataPeriod: period,
+        });
+        await db.query(
+          "UPDATE tasks SET reminder_count=reminder_count+1, last_reminder_sent_at=NOW() WHERE id=$1",
+          [task.id]
+        );
+        await logActivity(task.id, "missing_data_email_sent", req.user.sub, `Emailed ${client.email}`);
+        emailed = true;
+      } catch (err) {
+        // The request itself is saved — report the send failure instead of
+        // rolling back work the admin has already done.
+        console.error(`Missing-data email failed for task ${task.id}:`, err.message);
+        emailError = err.message;
+      }
+    }
+  }
+
+  return res.json(ok({
+    ...formatTask(updated),
+    missingDataRequest: meta.missingDataRequest,
+    emailed, emailError,
+  }, emailError ? `Saved, but the email could not be sent: ${emailError}` : "Missing-data request saved"));
+});
+
+// DELETE /api/admin/tasks/:taskId/missing-data-request — clear it
+router.delete("/tasks/:taskId/missing-data-request", async (req, res) => {
+  const { rows: [task] } = await db.query("SELECT * FROM tasks WHERE id=$1", [req.params.taskId]);
+  if (!task) return res.status(404).json(fail("Task not found"));
+
+  const meta = safeJson(task.metadata, {});
+  delete meta.missingDataRequest;
+  const { rows: [updated] } = await db.query(
+    "UPDATE tasks SET metadata=$1, updated_at=NOW() WHERE id=$2 RETURNING *",
+    [JSON.stringify(meta), task.id]
+  );
+  await logActivity(task.id, "missing_data_cleared", req.user.sub, "Missing-data request cleared");
+  return res.json(ok(formatTask(updated), "Missing-data request cleared"));
+});
+
+// ── Task documents — what the client uploaded against the task's requests ────
+
+// GET /api/admin/meta/document-request-file-types
+router.get("/meta/document-request-file-types", (_, res) =>
+  res.json(ok(REQUEST_FILE_TYPES, "Accepted file types"))
+);
+
+// GET /api/admin/tasks/:taskId/documents
+// The configured requests, each with the files the client has actually
+// uploaded against it — what the admin panel's "Documents requested" section
+// renders.
+router.get("/tasks/:taskId/documents", async (req, res) => {
+  const { rows: [task] } = await db.query("SELECT * FROM tasks WHERE id=$1", [req.params.taskId]);
+  if (!task) return res.status(404).json(fail("Task not found"));
+
+  const [requirements, { rows: docs }] = await Promise.all([
+    buildDocumentRequirements(task),
+    db.query(
+      `SELECT id, category, slot_index, file_name, original_filename, file_type, file_size, s3_key, uploaded_at
+       FROM task_documents WHERE task_id=$1 ORDER BY category, slot_index`,
+      [task.id]
+    ),
+  ]);
+
+  const uploads = docs.map((d) => ({
+    id:               d.id,
+    category:         d.category,
+    slotIndex:        d.slot_index,
+    fileName:         d.file_name,
+    originalFilename: d.original_filename || d.file_name,
+    fileType:         d.file_type,
+    fileSize:         Number(d.file_size || 0),
+    hasFile:          !!d.s3_key,
+    uploadedAt:       d.uploaded_at,
+  }));
+
+  return res.json(ok({
+    taskId:       task.id,
+    requirements,
+    uploads,
+    uploadCount:  uploads.length,
+    missingDataRequest: safeJson(task.metadata, {}).missingDataRequest || null,
+  }, "Task documents fetched"));
+});
+
+// GET /api/admin/task-documents/:documentId/download[?download=1]
+router.get("/task-documents/:documentId/download", async (req, res) => {
+  const { rows: [doc] } = await db.query("SELECT * FROM task_documents WHERE id=$1", [req.params.documentId]);
+  if (!doc) return res.status(404).json(fail("Document not found"));
+  if (!doc.s3_key) return res.status(400).json(fail("No stored file for this upload"));
+
+  try {
+    const url = await getDownloadUrl({
+      key: doc.s3_key,
+      forceDownload: req.query.download === "1",
+      fileName: doc.original_filename || doc.file_name,
+    });
+    return res.json(ok({ downloadUrl: url, fileName: doc.original_filename || doc.file_name }, "Download URL generated"));
+  } catch {
+    return res.status(500).json(fail("Could not generate download URL"));
+  }
+});
+
+// GET /api/admin/tasks/:taskId/documents/archive
+// Every uploaded file for the task as one .zip. Streams the bytes back
+// directly rather than a JSON envelope — the browser saves it as a file.
+router.get("/tasks/:taskId/documents/archive", async (req, res) => {
+  const { rows: [task] } = await db.query("SELECT id, title FROM tasks WHERE id=$1", [req.params.taskId]);
+  if (!task) return res.status(404).json(fail("Task not found"));
+
+  const { rows: docs } = await db.query(
+    `SELECT category, slot_index, file_name, original_filename, s3_key, uploaded_at
+     FROM task_documents WHERE task_id=$1 AND s3_key IS NOT NULL ORDER BY category, slot_index`,
+    [task.id]
+  );
+  if (!docs.length) return res.status(404).json(fail("This task has no uploaded documents yet"));
+
+  const entries = [];
+  const failed = [];
+  for (const d of docs) {
+    try {
+      const data = await getObjectBuffer({ key: d.s3_key });
+      // Prefix with the request key so a zip of several categories stays
+      // readable when the client named two files the same thing.
+      entries.push({
+        name: `${d.category}_${d.slot_index}_${d.original_filename || d.file_name}`,
+        data,
+        date: d.uploaded_at,
+      });
+    } catch (err) {
+      console.error(`Zip: could not read ${d.s3_key}:`, err.message);
+      failed.push(d.original_filename || d.file_name);
+    }
+  }
+  if (!entries.length) return res.status(502).json(fail("None of this task's files could be read from storage"));
+
+  let zip;
+  try {
+    zip = buildZip(entries);
+  } catch (err) {
+    return res.status(413).json(fail(err.message));
+  }
+
+  const safeTitle = String(task.title || "task").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 60);
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}_documents.zip"`);
+  res.setHeader("Content-Length", String(zip.length));
+  // Partial success has to be visible: the zip is still worth having, but the
+  // caller must be able to tell that some files didn't make it in.
+  if (failed.length) res.setHeader("X-Skipped-Files", String(failed.length));
+  return res.end(zip);
 });
 
 // POST /api/admin/tasks/:taskId/query-sheet — set Excel rows
