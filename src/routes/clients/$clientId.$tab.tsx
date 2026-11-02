@@ -1,9 +1,10 @@
 import { createFileRoute, useParams, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore, uid } from "@/store/useAppStore";
-import { clientsApi, tasksApi, metaApi, generalDocsAdminApi, profilesAdminApi, onboardingAdminApi, clientTakeOnAdminApi, notesAdminApi, taskDetailApi, taskDocsApi, assignableAdminsApi, ADMIN_STATUSES, type ApiTask, type AdminStatus, type TaskTypeInfo, type GeneralDocField, type GeneralDocStatus, type UserProfile, type OnboardingSection, type OnboardingField, type ConfigFieldDef, type ClientNote, type TaskComment, type TaskAttachment, type DueRule, type TaskDocRequest, type MissingDataRequest } from "@/lib/api";
+import { clientsApi, tasksApi, metaApi, generalDocsAdminApi, profilesAdminApi, onboardingAdminApi, clientTakeOnAdminApi, notesAdminApi, taskDetailApi, taskDocsApi, assignableAdminsApi, ADMIN_STATUSES, type ApiTask, type AdminStatus, type TaskTypeInfo, type GeneralDocField, type GeneralDocStatus, type UserProfile, type OnboardingSection, type OnboardingField, type ConfigFieldDef, type ClientNote, type TaskComment, type TaskAttachment, type DueRule, type ChaserSchedule, type TaskDocRequest, type MissingDataRequest } from "@/lib/api";
 import { GeneralDocsConfig } from "@/components/app/GeneralDocsConfig";
 import { DueRuleField } from "@/components/app/DueRuleField";
+import { ChaserScheduleField } from "@/components/app/ChaserScheduleField";
 import { TaskDocRequestsConfig, toRequestDraft, type RequestDraft } from "@/components/app/TaskDocRequestsConfig";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -1835,17 +1836,32 @@ function ServiceDetailTab({ clientId, tab }: { clientId: string; tab: string }) 
                     />
                     {f.placeholder && <p className="text-xs text-muted-foreground mt-1.5">{f.placeholder}</p>}
                   </>
+                ) : f.type === "chaser" ? (
+                  <>
+                    <ChaserScheduleField
+                      value={values[f.key] as ChaserSchedule | null}
+                      onChange={(v) => set(f.key, v)}
+                    />
+                    {f.placeholder && <p className="text-xs text-muted-foreground mt-1.5">{f.placeholder}</p>}
+                  </>
                 ) : f.type === "select" ? (
                   <select
                     className="w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
-                    value={String(values[f.key] ?? "")}
+                    value={String(values[f.key] ?? f.defaultValue ?? "")}
                     onChange={(e) => set(f.key, e.target.value)}
                   >
                     <option value="">Select…</option>
                     {(f.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
                   </select>
                 ) : f.type === "date" ? (
-                  <Input type="date" value={String(values[f.key] ?? "")} onChange={(e) => set(f.key, e.target.value)} />
+                  <>
+                    <Input
+                      type="date" value={String(values[f.key] ?? "")}
+                      min={f.futureOnly ? tomorrowYMD() : undefined}
+                      onChange={(e) => set(f.key, e.target.value)}
+                    />
+                    {f.futureOnly && <p className="text-xs text-muted-foreground mt-1">Must be a future date.</p>}
+                  </>
                 ) : f.type === "textarea" ? (
                   <Textarea rows={3} value={String(values[f.key] ?? "")} onChange={(e) => set(f.key, e.target.value)} />
                 ) : (
@@ -1867,6 +1883,14 @@ function ServiceDetailTab({ clientId, tab }: { clientId: string; tab: string }) 
       </div>
     </div>
   );
+}
+
+// Local calendar tomorrow as YYYY-MM-DD, for the future-only date picker's `min`.
+function tomorrowYMD(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 // ── General Documentation tab ──────────────────────────────────────────────────

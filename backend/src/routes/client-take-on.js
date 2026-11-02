@@ -3,6 +3,7 @@ const db = require("../db");
 const { fail, ok } = require("../helpers");
 const { requireAuth } = require("../middleware/auth");
 const { sendClientTakeOnCompletedEmail } = require("../config/aws");
+const { normalizeChaserSchedule } = require("../chaser-schedule");
 const { generateTasksForClient } = require("../task-generation");
 const { resolveNotificationEmails } = require("../notification-routing");
 
@@ -213,7 +214,9 @@ const CLIENT_TAKE_ON_SCHEMA = {
       showWhen: { field: "bookkeeping", value: "Yes" },
       fields: [
         { key: "bookkeeping_period", label: "Bookkeeping Period", type: "select", options: ["Weekly", "Monthly", "Quarterly", "Yearly"] },
-        { key: "bookkeeping_first_date", label: "First Bookkeeping Date", type: "date" },
+        // futureOnly: the picker blocks past dates and the PUT below enforces it
+        // server-side when the value is changed.
+        { key: "bookkeeping_first_date", label: "First Bookkeeping Date", type: "date", futureOnly: true },
         // Repeat rule deciding when each generated bookkeeping task falls due.
         // Rendered by a dedicated picker (type "duerule"); the stored value is
         // an object, not a string — see schedule.js's normalizeDueRule.
@@ -221,7 +224,14 @@ const CLIENT_TAKE_ON_SCHEMA = {
           key: "bookkeeping_due_rule", label: "Due Date", type: "duerule",
           placeholder: "Leave on the default to keep the standard deadline for this frequency.",
         },
-        { key: "bookkeeping_method", label: "Bookkeeping Method", type: "select", options: ["Paper record", "Spreadsheet", "Desktop", "Online"] },
+        { key: "bookkeeping_method", label: "Bookkeeping Method", type: "select", options: ["Paper record", "Spreadsheet", "Desktop", "Online"], defaultValue: "Online" },
+        // Admin-configured reminder cadence for this client's bookkeeping tasks
+        // (see chaser-schedule.js). The stored value is an object; absent or
+        // mode "default" keeps the standard cadence.
+        {
+          key: "bookkeeping_chaser_schedule", label: "Chaser Email Schedule", type: "chaser",
+          placeholder: "Leave on the default to use the standard reminder cadence for this frequency.",
+        },
         { key: "accounting_software", label: "Accounting Software", type: "select", options: ["Quickbooks", "Xero", "VT", "Sage", "Others"] },
         // Only meaningful when "Others" is picked — the renderer hides it otherwise.
         {
@@ -346,6 +356,30 @@ adminRouter.put("/clients/:clientId/client-take-on", async (req, res) => {
   const previous = await getSubmission(client.id);
   const wasSubmitted = previous?.status === "submitted";
   const status = submit || wasSubmitted ? "submitted" : "draft";
+
+  // First Bookkeeping Date must not be in the past. Only checked when the value
+  // actually changes, so re-saving other fields for a client whose first date
+  // has since passed isn't blocked. Compared against the UTC date, which is
+  // never ahead of the Atlantic date by more than a few hours, so "today" is
+  // allowed rather than risking a false rejection near midnight.
+  const newFirst = answers.bookkeeping_first_date ? String(answers.bookkeeping_first_date).slice(0, 10) : null;
+  const oldFirst = previous?.answers?.bookkeeping_first_date
+    ? String(previous.answers.bookkeeping_first_date).slice(0, 10) : null;
+  if (newFirst && newFirst !== oldFirst && newFirst < new Date().toISOString().slice(0, 10)) {
+    return res.status(400).json(fail("First Bookkeeping Date must be today or a future date"));
+  }
+
+  // Store only a clean custom schedule; anything else means "default cadence".
+  if ("bookkeeping_chaser_schedule" in answers) {
+    const schedule = normalizeChaserSchedule(answers.bookkeeping_chaser_schedule);
+    if (schedule) answers.bookkeeping_chaser_schedule = schedule;
+    else delete answers.bookkeeping_chaser_schedule;
+  }
+
+  // Bookkeeping Method defaults to Online once bookkeeping is switched on.
+  if (answers.bookkeeping === "Yes" && !answers.bookkeeping_method) {
+    answers.bookkeeping_method = "Online";
+  }
 
   const { rows: [row] } = await db.query(
     `INSERT INTO client_take_on_submissions (client_id, answers, status, submitted_at)

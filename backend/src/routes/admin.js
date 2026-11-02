@@ -549,16 +549,18 @@ router.patch("/tasks/:taskId", async (req, res) => {
     )));
   }
   if ("documentRequirements" in b || "documentRequests" in b || b.metadata) {
-    const curMeta = safeJson(existing.metadata, {});
-    const newMeta = { ...curMeta, ...(b.metadata || {}) };
+    // Send only the keys this request changes and merge them in SQL. Reading
+    // the whole blob, editing it here and writing it back lets two admins
+    // editing different metadata keys at once silently overwrite each other.
+    const patch = { ...(b.metadata || {}) };
     if ("documentRequirements" in b) {
-      newMeta.documentRequirements = normalizeDocumentRequirements(b.documentRequirements);
+      patch.documentRequirements = normalizeDocumentRequirements(b.documentRequirements);
     }
     if ("documentRequests" in b) {
-      newMeta.documentRequests = normalizeDocumentRequests(b.documentRequests);
+      patch.documentRequests = normalizeDocumentRequests(b.documentRequests);
     }
-    sets.push(`metadata=$${i++}`);
-    vals.push(JSON.stringify(newMeta));
+    sets.push(`metadata=COALESCE(metadata,'{}'::jsonb) || $${i++}::jsonb`);
+    vals.push(JSON.stringify(patch));
   }
   vals.push(req.params.taskId);
   const { rows: [updated] } = await db.query(
@@ -733,8 +735,7 @@ router.post("/tasks/:taskId/missing-data-request", async (req, res) => {
     return res.status(400).json(fail("Give at least a period, a note, or the outstanding documents"));
   }
 
-  const meta = safeJson(task.metadata, {});
-  meta.missingDataRequest = {
+  const missingDataRequest = {
     period, note, outstandingKeys,
     requestedAt: new Date().toISOString(),
     requestedBy: req.user.sub,
@@ -744,8 +745,9 @@ router.post("/tasks/:taskId/missing-data-request", async (req, res) => {
   // Recording a missing-data request IS the "partial data" state — set it here
   // so the chasers pick up the new wording without a second manual step.
   const { rows: [updated] } = await db.query(
-    "UPDATE tasks SET metadata=$1, admin_status='Partial Data received', updated_at=NOW() WHERE id=$2 RETURNING *",
-    [JSON.stringify(meta), task.id]
+    `UPDATE tasks SET metadata=COALESCE(metadata,'{}'::jsonb) || jsonb_build_object('missingDataRequest', $1::jsonb),
+       admin_status='Partial Data received', updated_at=NOW() WHERE id=$2 RETURNING *`,
+    [JSON.stringify(missingDataRequest), task.id]
   );
 
   await logActivity(task.id, "missing_data_requested", req.user.sub,
@@ -785,7 +787,7 @@ router.post("/tasks/:taskId/missing-data-request", async (req, res) => {
 
   return res.json(ok({
     ...formatTask(updated),
-    missingDataRequest: meta.missingDataRequest,
+    missingDataRequest,
     emailed, emailError,
   }, emailError ? `Saved, but the email could not be sent: ${emailError}` : "Missing-data request saved"));
 });
@@ -795,11 +797,9 @@ router.delete("/tasks/:taskId/missing-data-request", async (req, res) => {
   const { rows: [task] } = await db.query("SELECT * FROM tasks WHERE id=$1", [req.params.taskId]);
   if (!task) return res.status(404).json(fail("Task not found"));
 
-  const meta = safeJson(task.metadata, {});
-  delete meta.missingDataRequest;
   const { rows: [updated] } = await db.query(
-    "UPDATE tasks SET metadata=$1, updated_at=NOW() WHERE id=$2 RETURNING *",
-    [JSON.stringify(meta), task.id]
+    "UPDATE tasks SET metadata=COALESCE(metadata,'{}'::jsonb) - 'missingDataRequest', updated_at=NOW() WHERE id=$1 RETURNING *",
+    [task.id]
   );
   await logActivity(task.id, "missing_data_cleared", req.user.sub, "Missing-data request cleared");
   return res.json(ok(formatTask(updated), "Missing-data request cleared"));
@@ -940,8 +940,9 @@ router.post("/tasks/:taskId/query-sheet", async (req, res) => {
   }
 
   if (downloadUrl) {
-    const meta = { ...(task.metadata || {}), downloadUrl };
-    await db.query("UPDATE tasks SET metadata=$1, updated_at=NOW() WHERE id=$2", [meta, task.id]);
+    await db.query(
+      "UPDATE tasks SET metadata=COALESCE(metadata,'{}'::jsonb) || jsonb_build_object('downloadUrl', $1::text), updated_at=NOW() WHERE id=$2",
+      [downloadUrl, task.id]);
   }
 
   return res.json(ok({ taskId: task.id, rowsUploaded: rowsData.length }, "Query sheet rows set"));

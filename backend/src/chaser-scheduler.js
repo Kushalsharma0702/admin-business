@@ -27,6 +27,7 @@ const { sendDataRequestEmail, sendQueryReminderEmail } = require("./config/aws")
 const { generateTasksForClient } = require("./task-generation");
 const { recurringConfigFromAnswers } = require("./routes/client-take-on");
 const { canSendAt, atlanticDateKey } = require("./send-window");
+const { normalizeChaserSchedule, customChaserDue } = require("./chaser-schedule");
 
 const MONTHLY_QUARTERLY_INTERVAL_DAYS = 2;
 const MONTHLY_QUARTERLY_LAST_DOM = 10;   // chasers run the 1st through the 10th
@@ -109,6 +110,13 @@ const BOOKKEEPING_AWAITING_SQL = `
   WHERE task_type='BOOKKEEPING'
     AND closed_at IS NULL
     AND admin_status = ANY($1)
+    -- A client with an admin-configured Chaser Email Schedule is handled by
+    -- runCustomBookkeepingChaser instead, so the two never double-send.
+    AND NOT EXISTS (
+      SELECT 1 FROM client_take_on_submissions s
+      WHERE s.client_id = tasks.client_id
+        AND s.answers->'bookkeeping_chaser_schedule'->>'mode' = 'custom'
+    )
 `;
 
 // ── Monthly/Quarterly bookkeeping data-request chaser ──────────────────────
@@ -172,6 +180,44 @@ async function runYearlyChaser(today, now) {
     if (!isFirst && daysSinceLastEmail(task, today) < YEARLY_CHASER_INTERVAL_DAYS) continue;
     await sendDataRequest(task, { isChaser: !isFirst, now });
   }
+}
+
+// ── Bookkeeping chasers on the admin's own Chaser Email Schedule ───────────
+// Read live from the client's take-on answers (not a copy on the task), so an
+// edit on the Bookkeeping tab applies to tasks that already exist.
+async function runCustomBookkeepingChaser(today, now) {
+  const { rows: tasks } = await db.query(
+    `SELECT t.id, t.client_id, t.title, t.task_type, t.admin_status, t.metadata,
+            t.open_date, t.last_reminder_sent_at, t.reminder_count,
+            s.answers->'bookkeeping_chaser_schedule' AS schedule
+     FROM tasks t
+     JOIN client_take_on_submissions s ON s.client_id = t.client_id
+     WHERE t.task_type='BOOKKEEPING'
+       AND t.closed_at IS NULL
+       AND t.admin_status = ANY($1)
+       AND s.answers->'bookkeeping_chaser_schedule'->>'mode' = 'custom'`,
+    [AWAITING_DATA_STATUSES]
+  );
+
+  const todayYMD = atlanticDateKey(now);
+  for (const task of tasks) {
+    const schedule = normalizeChaserSchedule(task.schedule);
+    if (!schedule || alreadySentToday(task, now)) continue;
+    const due = customChaserDue({
+      schedule,
+      openDate: task.open_date ? localYMD(task.open_date) : null,
+      todayYMD,
+      daysSinceLast: daysSinceLastEmail(task, today),
+    });
+    if (!due) continue;
+    await sendDataRequest(task, { isChaser: task.reminder_count > 0, now });
+  }
+}
+
+// A DATE column arrives as a JS Date at local midnight — read its local parts.
+function localYMD(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 // ── Query (bookkeeping) / HST-approval reminders — sent twice, 3 days apart ─
@@ -247,6 +293,7 @@ async function runChaserSweep(now = new Date()) {
   await runMonthlyQuarterlyChaser(today, now);
   await runWeeklyChaser(today, now);
   await runYearlyChaser(today, now);
+  await runCustomBookkeepingChaser(today, now);
   await runQueryAndApprovalReminders(today, now);
   return { generated: true, emailsSent: true };
 }

@@ -856,6 +856,18 @@ export type OnboardingField = {
   fields?: OnboardingField[];
   /** Shown only when another field in the same section/tab has this value — e.g. hst_quarter_option only when hst_period is "Quarterly". */
   dependsOn?: { field: string; value: string };
+  /** type "date": the picker blocks past dates (the server enforces it on change). */
+  futureOnly?: boolean;
+  /** Shown (and saved by the server) when nothing has been chosen yet. */
+  defaultValue?: string;
+};
+/** Admin-configured bookkeeping reminder cadence; absent or mode "default" = standard cadence. */
+export type ChaserSchedule = {
+  mode: "default" | "custom";
+  intervalDays?: number;
+  startOffsetDays?: number;
+  durationDays?: number;
+  extraDates?: string[];
 };
 export type OnboardingSection = {
   key: string;
