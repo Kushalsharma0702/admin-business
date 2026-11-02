@@ -747,6 +747,8 @@ export type TaskDocRequest = {
   maxCount: number;
   acceptedTypes: string[];
   notes: string;
+  /** Admin "Mark as done" — undone requests become the missing-data list. */
+  done?: boolean;
   displayOrder: number;
 };
 

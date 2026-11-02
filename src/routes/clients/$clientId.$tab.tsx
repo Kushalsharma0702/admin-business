@@ -633,7 +633,10 @@ function Tasks({ clientId }: { clientId: string }) {
     setMissing({
       period: mdr?.period ?? "",
       note: mdr?.note ?? "",
-      outstandingKeys: mdr?.outstandingKeys ?? [],
+      // No saved request yet: carry every request not marked done into the
+      // missing-data section by default.
+      outstandingKeys: mdr?.outstandingKeys ??
+        requests.filter((r) => r.key && !r.done).map((r) => r.key as string),
     });
     setDetailTab("comments");
     setNewComment("");

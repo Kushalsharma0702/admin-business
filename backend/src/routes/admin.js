@@ -722,9 +722,12 @@ router.post("/tasks/:taskId/missing-data-request", async (req, res) => {
   // Outstanding items must name requests the task actually has, otherwise the
   // client would be chased for something never asked of them.
   const configured = new Set(buildRequestKeys(task));
+  // When the caller doesn't say, outstanding = every request not marked done.
+  const notDoneKeys = normalizeDocumentRequests(safeJson(task.metadata, {}).documentRequests)
+    .filter((r) => !r.done).map((r) => r.key);
   const outstandingKeys = Array.isArray(b.outstandingKeys)
     ? [...new Set(b.outstandingKeys.map(String).filter((k) => configured.has(k)))]
-    : [];
+    : notDoneKeys.filter((k) => configured.has(k));
 
   if (!period && !note && !outstandingKeys.length) {
     return res.status(400).json(fail("Give at least a period, a note, or the outstanding documents"));

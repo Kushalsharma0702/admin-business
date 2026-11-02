@@ -114,6 +114,9 @@ function normalizeDocumentRequests(input) {
       maxCount:      Math.max(1, Math.min(50, Number(raw.maxCount) || 1)),
       acceptedTypes: accepted.length ? [...new Set(accepted)] : REQUEST_FILE_TYPES,
       notes:         String(raw.notes || "").trim(),
+      // Admin's per-request "Mark as done": everything NOT done is what a
+      // Partial Data received task carries into its missing-data section.
+      done:          raw.done === true,
       displayOrder:  typeof raw.displayOrder === "number" ? raw.displayOrder : idx + 1,
     });
   }

@@ -4,7 +4,7 @@ const ADMIN_STATUSES = [
   "Data Missing Closed", "Work in Progress", "Query sent to Support team",
   "Query sent to client", "Partial Query received", "Review",
   "Sent for Approval to support team", "Sent for Approval to client",
-  "Approval received", "Filed",
+  "Approval received", "Send for automation", "Received from automation", "Filed",
 ];
 
 const TASK_TYPES = [
