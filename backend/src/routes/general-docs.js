@@ -50,6 +50,22 @@ const DEFAULT_GENERAL_DOC_FIELDS = [
   },
 ];
 
+// The onboarding form shows this checklist right under "I will provide the
+// incorporation documents", and that upload has to be there by default. The
+// default above only applies to a client with no checklist yet; once an admin
+// saves their own fields (or switches the checklist off) it was gone. Merge it
+// back in for the client-facing reads/uploads without touching what the admin
+// saved: an admin who defines their own "incorporation_documents" field wins.
+function withIncorporationField(cfg) {
+  const own = cfg && cfg.enabled ? (cfg.fields || []) : [];
+  const has = own.some((f) => f.key === DEFAULT_GENERAL_DOC_FIELDS[0].key);
+  return {
+    ...(cfg || {}),
+    enabled: true,
+    fields: has ? own : [DEFAULT_GENERAL_DOC_FIELDS[0], ...own],
+  };
+}
+
 async function getConfigForClient(clientId) {
   const { rows: [cfg] } = await db.query(
     "SELECT * FROM general_doc_configs WHERE client_id=$1",
@@ -152,7 +168,12 @@ adminRouter.get("/clients/:clientId/general-docs", async (req, res) => {
     getUploadsForClient(client.id),
   ]);
 
-  const status = buildDocStatus(config, uploads);
+  // Show the client's default incorporation upload to the admin too, keeping
+  // the admin's own fields and on/off toggle exactly as saved.
+  const adminFields = config?.fields || [];
+  const withIncorp = adminFields.some((f) => f.key === DEFAULT_GENERAL_DOC_FIELDS[0].key)
+    ? adminFields : [DEFAULT_GENERAL_DOC_FIELDS[0], ...adminFields];
+  const status = buildDocStatus({ ...(config || {}), fields: withIncorp }, uploads);
 
   return res.json(ok({
     clientId:    client.id,
@@ -297,7 +318,7 @@ clientRouter.get("/", async (req, res) => {
     getUploadsForClient(clientId),
   ]);
 
-  const status = buildDocStatus(config, uploads);
+  const status = buildDocStatus(withIncorporationField(config), uploads);
   return res.json(ok({ clientId, ...status }, "General documentation fetched"));
 });
 
@@ -306,10 +327,8 @@ clientRouter.get("/", async (req, res) => {
 clientRouter.post("/upload", upload.single("file"), async (req, res) => {
   const clientId = req.user.sub;
 
-  const config = await getConfigForClient(clientId);
-  if (!config || !config.enabled) {
-    return res.status(400).json(fail("General documentation is not enabled for your account"));
-  }
+  // Always accepts the default incorporation upload (see withIncorporationField).
+  const config = withIncorporationField(await getConfigForClient(clientId));
 
   if (!req.file) return res.status(400).json(fail("file is required"));
 
