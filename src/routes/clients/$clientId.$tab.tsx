@@ -1160,16 +1160,18 @@ function Tasks({ clientId }: { clientId: string }) {
 
       {/* ── Task detail panel: edit fields, attachments, internal comments/activity ── */}
       <Dialog open={editing !== null} onOpenChange={(o) => { if (!o) setEditing(null); }}>
-        <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col p-0 gap-0">
+        {/* Full-screen task editor: fills the viewport (cn/tailwind-merge lets these
+            override the dialog's default max-w-lg + rounded corners). */}
+        <DialogContent className="w-screen h-screen max-w-none max-h-none rounded-none sm:rounded-none flex flex-col p-0 gap-0">
           <DialogHeader className="px-5 pt-5 pb-3 border-b border-border shrink-0">
             <DialogTitle>{editing?.title ?? "Task"}</DialogTitle>
           </DialogHeader>
           {editing && (() => {
             const editSchema = workflowTypes.find((t) => t.key === editing.taskType)?.configSchema ?? [];
             return (
-              <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] overflow-hidden flex-1 min-h-0">
+              <div className="grid grid-cols-1 lg:grid-cols-[1fr_440px] overflow-hidden flex-1 min-h-0">
                 {/* ── Details (editable) ── */}
-                <div className="space-y-3 p-5 overflow-y-auto border-b lg:border-b-0 lg:border-r border-border">
+                <div className="space-y-3 p-5 overflow-y-auto border-b lg:border-b-0 lg:border-r border-border [&>*]:max-w-4xl">
                   <div>
                     <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Task title *</label>
                     <Input value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} className="mt-1" />
