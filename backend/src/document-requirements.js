@@ -129,6 +129,15 @@ function taskMetadata(task) {
     : (task.metadata || {});
 }
 
+// Display names of a task's document requests, for emails and the client view. With `keys`
+// only those requests; otherwise every request not yet marked done. `overrides` is the
+// admin's edited wording for the missing-data list ({ key: "Bank - 0049 - Oct 1 to 15 Data missing" }).
+function requestItemNames(metadata, keys = null, overrides = {}) {
+  const requests = normalizeDocumentRequests((metadata || {}).documentRequests);
+  const pick = keys ? requests.filter((r) => keys.includes(r.key)) : requests.filter((r) => !r.done);
+  return pick.map((r) => (overrides && overrides[r.key]) || r.name).filter(Boolean);
+}
+
 function getDocumentRequirementsFromTask(task) {
   const meta = taskMetadata(task);
 
@@ -224,6 +233,7 @@ module.exports = {
   REQUEST_FILE_TYPES,
   normalizeDocumentRequirements,
   normalizeDocumentRequests,
+  requestItemNames,
   getDocumentRequirementsFromTask,
   buildDocumentRequirements,
   validateUploadSlot,

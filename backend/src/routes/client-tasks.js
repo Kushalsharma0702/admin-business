@@ -230,9 +230,12 @@ router.get("/:task_id/document-buckets", async (req, res) => {
   const meta = safeJson(task.metadata, {});
   const mdr = meta.missingDataRequest || null;
   const outstanding = new Set(mdr?.outstandingKeys || []);
+  const itemLabels = new Map((mdr?.items || []).map((i) => [i.key, i.name]));
   const annotated = mdr
-    ? requirements.map((r) => ({ ...r, outstanding: outstanding.has(r.key) }))
+    ? requirements.map((r) => ({ ...r, outstanding: outstanding.has(r.key), outstandingLabel: itemLabels.get(r.key) ?? null }))
     : requirements;
+  // The admin's first "Request Data" note: what the client is told to upload and for which period.
+  const dr = meta.dataRequest || null;
 
   return res.json(ok({
     taskId: task.id,
@@ -243,6 +246,11 @@ router.get("/:task_id/document-buckets", async (req, res) => {
       note: mdr.note ?? null,
       outstandingKeys: mdr.outstandingKeys || [],
       requestedAt: mdr.requestedAt ?? null,
+    },
+    dataRequest: dr && {
+      period: dr.period ?? null,
+      note: dr.note ?? null,
+      requestedAt: dr.requestedAt ?? null,
     },
     summary: {
       totalSlots,

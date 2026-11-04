@@ -27,6 +27,7 @@ const { sendDataRequestEmail, sendQueryReminderEmail } = require("./config/aws")
 const { generateTasksForClient } = require("./task-generation");
 const { recurringConfigFromAnswers } = require("./routes/client-take-on");
 const { canSendAt, atlanticDateKey } = require("./send-window");
+const { requestItemNames } = require("./document-requirements");
 const { normalizeChaserSchedule, customChaserDue } = require("./chaser-schedule");
 
 const MONTHLY_QUARTERLY_INTERVAL_DAYS = 2;
@@ -80,17 +81,28 @@ async function sendDataRequest(task, { isChaser, now }) {
   const { name, email } = await clientInfo(task.client_id);
   if (!email) return false;
   try {
+    // Switches the copy from "please send your documents" to "we are still
+    // missing the items below" once partial data has arrived.
+    const partial = isMissingDataChase(task.admin_status);
+    const meta = task.metadata || {};
+    const mdr = meta.missingDataRequest || null;
+    // Partial: repeat the missing-data request. Otherwise repeat the admin's first
+    // "Request Data" (note, period and document list) when there was one.
+    const source = partial ? mdr : (meta.dataRequest || null);
+    const items = partial
+      ? requestItemNames(meta, mdr?.outstandingKeys || null,
+          Object.fromEntries((mdr?.items || []).map((i) => [i.key, i.name])))
+      : requestItemNames(meta);
     await sendDataRequestEmail({
       toEmail: email,
       clientName: name,
       taskTitle: task.title,
       taskType: task.task_type,
       isChaser,
-      // Switches the copy from "please send your documents" to "we are still
-      // missing the items below" once partial data has arrived.
-      isMissingData: isMissingDataChase(task.admin_status),
-      missingDataNote: task.metadata?.missingDataRequest?.note || null,
-      missingDataPeriod: task.metadata?.missingDataRequest?.period || null,
+      isMissingData: partial,
+      missingDataNote: source?.note || null,
+      missingDataPeriod: source?.period || null,
+      missingItems: items,
     });
     await db.query(
       "UPDATE tasks SET reminder_count=reminder_count+1, last_reminder_sent_at=NOW() WHERE id=$1",

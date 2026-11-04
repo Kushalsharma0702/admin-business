@@ -322,6 +322,37 @@ function getWorkflow(taskType) {
   return WORKFLOWS[taskType] || null;
 }
 
+// What the client is told for each ADMIN status of a Bookkeeping task (the Edit Task
+// dropdown). Changing the dropdown used to leave the client's status untouched - it only
+// moved when a workflow sub-step was advanced - and the two automation statuses had no
+// client wording at all. The wording reuses the labels the Bookkeeping workflow above
+// already shows clients for the equivalent sub-step, so nothing new appears in the app.
+// `null` = leave the client's current status as it is.
+// To change what a status tells the client, edit this one table.
+const BOOKKEEPING_ADMIN_STATUS_CLIENT_LABEL = {
+  "On Hold":                          "Data pending",
+  "Not to Do":                        null,
+  "Data not received":                "Data pending",
+  "Partial Data received":            "Data pending",
+  "Data Missing Closed":              "Data received",
+  "Work in Progress":                 "Work in Progress",
+  "Query sent to Support team":       "Work in Progress",
+  "Query sent to client":             "Query response pending",
+  "Partial Query received":           "Partial Query response pending",
+  "Review":                           "Work in Progress",
+  "Sent for Approval to support team":"Work in Progress",
+  "Sent for Approval to client":      "Financials Ready",
+  "Approval received":                "Financials Ready",
+  "Send for automation":              "Work in Progress",
+  "Received from automation":         "Work in Progress",
+  "Filed":                            "Financials Ready",
+};
+
+function clientProgressForAdminStatus(taskType, adminStatus) {
+  if (taskType !== TASK_TYPES.BOOKKEEPING) return null;          // other task types keep their own mapping
+  return BOOKKEEPING_ADMIN_STATUS_CLIENT_LABEL[adminStatus] ?? null;
+}
+
 function getClientProgress(taskType, subtaskName) {
   const wf = WORKFLOWS[taskType];
   if (!wf) return null;
@@ -372,6 +403,8 @@ module.exports = {
   WORKFLOWS,
   getWorkflow,
   getClientProgress,
+  clientProgressForAdminStatus,
+  BOOKKEEPING_ADMIN_STATUS_CLIENT_LABEL,
   getSubtaskOrder,
   isValidSubtask,
   getFirstSubtask,

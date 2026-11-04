@@ -242,20 +242,28 @@ async function sendTaskChangeNotification({
 // was asked for (admin_status "Partial Data received"): from "please send your
 // documents" to "we are still missing the items below", optionally naming the
 // period and the admin's note from the missing-data request.
+// Admin-typed text goes into an HTML email; escape it so it cannot inject markup.
+const escHtml = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
 async function sendDataRequestEmail({
   toEmail, clientName, taskTitle, taskType, isChaser,
   isMissingData = false, missingDataNote = null, missingDataPeriod = null,
+  missingItems = [],                      // names of the documents being asked for (optional)
 }) {
+  const itemList = Array.isArray(missingItems) ? missingItems.filter(Boolean) : [];
+  const itemsHtml = itemList.length
+    ? `<p style="color:#475569;margin-bottom:4px">${isMissingData ? "Still needed:" : "Please upload:"}</p>
+       <ul style="color:#1e293b;margin-top:0">${itemList.map((n) => `<li>${escHtml(n)}</li>`).join("")}</ul>` : "";
   const heading = isMissingData
     ? "We're still missing some of your information"
     : isChaser
       ? "Reminder: We're still waiting on your information"
       : "We need your information";
   const periodLine = missingDataPeriod
-    ? `<p style="color:#475569">Period: <strong>${missingDataPeriod}</strong></p>` : "";
+    ? `<p style="color:#475569">Period: <strong>${escHtml(missingDataPeriod)}</strong></p>` : "";
   const noteLine = missingDataNote
     ? `<div style="background:#eef2ff;border-left:3px solid #4f46e5;padding:12px 14px;margin:16px 0">
-         <p style="color:#1e293b;margin:0;font-size:14px;white-space:pre-wrap">${missingDataNote}</p>
+         <p style="color:#1e293b;margin:0;font-size:14px;white-space:pre-wrap">${escHtml(missingDataNote)}</p>
        </div>` : "";
   const htmlBody = `
     <div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px">
@@ -274,6 +282,7 @@ async function sendDataRequestEmail({
         </p>
         ${periodLine}
         ${noteLine}
+        ${itemsHtml}
         <p style="color:#475569;font-size:13px">Log in to your client portal to upload what's needed.</p>
       </div>
     </div>
@@ -287,6 +296,7 @@ async function sendDataRequestEmail({
         : `Please provide your information/documents for ${taskTitle || taskType}.`,
     missingDataPeriod ? `\nPeriod: ${missingDataPeriod}` : "",
     missingDataNote ? `\n${missingDataNote}` : "",
+    itemList.length ? `\n${isMissingData ? "Still needed:" : "Please upload:"}\n${itemList.map((n) => "- " + n).join("\n")}` : "",
   ].filter(Boolean).join("\n");
 
   const cmd = new SendEmailCommand({

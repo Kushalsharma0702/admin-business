@@ -606,6 +606,20 @@ export const clientTasksApi = {
 
 // ─── Admin — General Documentation ───────────────────────────────────────────
 export const generalDocsAdminApi = {
+  /** Every uploaded general document of the client as one zip (streamed, so fetched as a blob and saved). */
+  downloadArchive: async (clientId: string, suggestedName: string) => {
+    const res = await fetch(`${API_BASE}/api/admin/clients/${clientId}/general-docs/archive`, { headers: { Authorization: `Bearer ${getToken()}` } });
+    if (!res.ok) {
+      const msg = await res.json().catch(() => null);
+      throw new Error(msg?.message ?? "Could not build the archive");
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = suggestedName;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  },
   get: (clientId: string) =>
     request<{ success: boolean; data: GeneralDocStatus & { clientId: string; config: { enabled: boolean; fields: GeneralDocField[]; updatedAt: string } | null; uploadCount: number; uploads: GeneralDocUpload[] } }>(
       `/api/admin/clients/${clientId}/general-docs`
@@ -787,18 +801,27 @@ export type MissingDataRequest = {
   period: string | null;
   note: string | null;
   outstandingKeys: string[];
+  /** The admin's own wording for outstanding fields (copies; the original requests are untouched). */
+  items?: { key: string; name: string }[];
   requestedAt: string | null;
   requestedByName?: string | null;
 };
+/** The admin's first "Request Data" for a task (kept so reminders repeat it). */
+export type DataRequest = { period: string | null; note: string | null; requestedAt: string | null; requestedByName?: string | null };
 
 export const taskDocsApi = {
   get: (taskId: string) =>
     request<{ success: boolean; data: { taskId: string; requirements: TaskDocRequirement[]; uploads: TaskDocUpload[]; uploadCount: number; missingDataRequest: MissingDataRequest | null } }>(
       `/api/admin/tasks/${taskId}/documents`
     ),
-  saveMissingDataRequest: (taskId: string, body: { period?: string; note?: string; outstandingKeys?: string[]; sendEmail?: boolean }) =>
+  saveMissingDataRequest: (taskId: string, body: { period?: string; note?: string; outstandingKeys?: string[]; items?: { key: string; name: string }[]; sendEmail?: boolean }) =>
     request<{ success: boolean; message: string; data: ApiTask & { missingDataRequest: MissingDataRequest; emailed: boolean; emailError: string | null } }>(
       `/api/admin/tasks/${taskId}/missing-data-request`,
+      { method: "POST", body: JSON.stringify(body) }
+    ),
+  requestData: (taskId: string, body: { period?: string; note?: string; sendEmail?: boolean }) =>
+    request<{ success: boolean; message: string; data: ApiTask & { dataRequest: DataRequest; emailed: boolean; emailError: string | null } }>(
+      `/api/admin/tasks/${taskId}/request-data`,
       { method: "POST", body: JSON.stringify(body) }
     ),
   clearMissingDataRequest: (taskId: string) =>

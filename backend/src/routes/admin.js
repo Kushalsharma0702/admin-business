@@ -5,12 +5,12 @@ const { fail, ok, paged, formatTask, formatUser, hashPassword, generateInviteTok
 const { requireAuth } = require("../middleware/auth");
 const { sendInviteEmail, getDownloadUrl, getObjectBuffer, sendDataRequestEmail } = require("../config/aws");
 const env = require("../config/env");
-const { TASK_TYPES, WORKFLOWS, getWorkflow, getAllClientProgressValues } = require("../workflows");
+const { TASK_TYPES, WORKFLOWS, getWorkflow, getAllClientProgressValues, clientProgressForAdminStatus } = require("../workflows");
 const { initializeSubtasks, advanceToSubtask, getSubtasks, getActivityLog, logActivity } = require("../workflow-service");
 const { enrichTaskWithConfig, mergeConfigUpdate, getConfigSchemaForTaskType } = require("../config-fields");
 const {
   DOCUMENT_CATALOG, REQUEST_FILE_TYPES,
-  normalizeDocumentRequirements, normalizeDocumentRequests, buildDocumentRequirements,
+  normalizeDocumentRequirements, normalizeDocumentRequests, buildDocumentRequirements, requestItemNames,
   getDocumentRequirementsFromTask,
 } = require("../document-requirements");
 const { buildZip } = require("../zip");
@@ -536,6 +536,12 @@ router.patch("/tasks/:taskId", async (req, res) => {
       vals.push(DATE_COLS.has(snake) && !b[camel] ? null : b[camel]);
     }
   }
+  // The client sees "client_progress", not the admin status. Keep the two in step for
+  // Bookkeeping tasks (see BOOKKEEPING_ADMIN_STATUS_CLIENT_LABEL in workflows.js).
+  if ("adminStatus" in b) {
+    const progress = clientProgressForAdminStatus(existing.task_type, b.adminStatus);
+    if (progress) { sets.push(`client_progress=$${i++}`); vals.push(progress); }
+  }
   if ("assignedTo" in b) {
     const assignedTo = await resolveAssignee(b.assignedTo);
     if (assignedTo === INVALID_ASSIGNEE) return res.status(400).json(fail("assignedTo is not an active admin"));
@@ -735,8 +741,18 @@ router.post("/tasks/:taskId/missing-data-request", async (req, res) => {
     return res.status(400).json(fail("Give at least a period, a note, or the outstanding documents"));
   }
 
+  // The admin's edited wording for each outstanding item ("Bank - 0049 - Oct 1 to 15 Data
+  // missing"). Copies only: the original document requests are left exactly as they are.
+  const items = Array.isArray(b.items)
+    ? b.items
+        .filter((it) => it && outstandingKeys.includes(String(it.key)))
+        .map((it) => ({ key: String(it.key), name: String(it.name || "").trim().slice(0, 200) }))
+        .filter((it) => it.name)
+    : [];
+  const overrides = Object.fromEntries(items.map((it) => [it.key, it.name]));
+
   const missingDataRequest = {
-    period, note, outstandingKeys,
+    period, note, outstandingKeys, items,
     requestedAt: new Date().toISOString(),
     requestedBy: req.user.sub,
     requestedByName: req.user.name || null,
@@ -746,8 +762,8 @@ router.post("/tasks/:taskId/missing-data-request", async (req, res) => {
   // so the chasers pick up the new wording without a second manual step.
   const { rows: [updated] } = await db.query(
     `UPDATE tasks SET metadata=COALESCE(metadata,'{}'::jsonb) || jsonb_build_object('missingDataRequest', $1::jsonb),
-       admin_status='Partial Data received', updated_at=NOW() WHERE id=$2 RETURNING *`,
-    [JSON.stringify(missingDataRequest), task.id]
+       admin_status='Partial Data received', client_progress=COALESCE($3, client_progress), updated_at=NOW() WHERE id=$2 RETURNING *`,
+    [JSON.stringify(missingDataRequest), task.id, clientProgressForAdminStatus(task.task_type, "Partial Data received")]
   );
 
   await logActivity(task.id, "missing_data_requested", req.user.sub,
@@ -769,6 +785,7 @@ router.post("/tasks/:taskId/missing-data-request", async (req, res) => {
           taskTitle: task.title, taskType: task.task_type,
           isChaser: true, isMissingData: true,
           missingDataNote: note, missingDataPeriod: period,
+          missingItems: requestItemNames(safeJson(task.metadata, {}), outstandingKeys, overrides),
         });
         await db.query(
           "UPDATE tasks SET reminder_count=reminder_count+1, last_reminder_sent_at=NOW() WHERE id=$1",
@@ -790,6 +807,55 @@ router.post("/tasks/:taskId/missing-data-request", async (req, res) => {
     missingDataRequest,
     emailed, emailError,
   }, emailError ? `Saved, but the email could not be sent: ${emailError}` : "Missing-data request saved"));
+});
+
+// POST /api/admin/tasks/:taskId/request-data
+// body: { period?, note?, sendEmail?: boolean }
+// The first request: asks the client to upload every document field on the task that is
+// not yet marked done. Remembered on the task so the chaser reminders repeat the same note.
+// Does not change the task's status (use missing-data-request once some data has arrived).
+router.post("/tasks/:taskId/request-data", async (req, res) => {
+  const { rows: [task] } = await db.query("SELECT * FROM tasks WHERE id=$1", [req.params.taskId]);
+  if (!task) return res.status(404).json(fail("Task not found"));
+  if (task.closed_at) return res.status(409).json(fail("This task is closed"));
+
+  const b = req.body || {};
+  const period = String(b.period || "").trim() || null;
+  const note = String(b.note || "").trim() || null;
+  const meta = safeJson(task.metadata, {});
+  const items = requestItemNames(meta);
+  if (!items.length && !note) return res.status(400).json(fail("Add at least one document request or a note first"));
+
+  const dataRequest = { period, note, requestedAt: new Date().toISOString(), requestedBy: req.user.sub, requestedByName: req.user.name || null };
+  const { rows: [updated] } = await db.query(
+    "UPDATE tasks SET metadata=COALESCE(metadata,'{}'::jsonb) || jsonb_build_object('dataRequest', $1::jsonb), updated_at=NOW() WHERE id=$2 RETURNING *",
+    [JSON.stringify(dataRequest), task.id]
+  );
+  await logActivity(task.id, "data_requested", req.user.sub,
+    [period && `period ${period}`, items.length && `${items.length} document(s)`, note && "note added"].filter(Boolean).join("; ") || "Data requested");
+
+  let emailed = false, emailError = null;
+  if (b.sendEmail) {
+    const { rows: [client] } = await db.query("SELECT name, email FROM users WHERE id=$1", [task.client_id]);
+    if (!client?.email) emailError = "This client has no email address on file";
+    else {
+      try {
+        await sendDataRequestEmail({
+          toEmail: client.email, clientName: client.name, taskTitle: task.title, taskType: task.task_type,
+          isChaser: false, isMissingData: false,
+          missingDataNote: note, missingDataPeriod: period, missingItems: items,
+        });
+        await db.query("UPDATE tasks SET reminder_count=reminder_count+1, last_reminder_sent_at=NOW() WHERE id=$1", [task.id]);
+        await logActivity(task.id, "data_request_email_sent", req.user.sub, `Emailed ${client.email}`);
+        emailed = true;
+      } catch (err) {
+        console.error(`Data-request email failed for task ${task.id}:`, err.message);
+        emailError = err.message;
+      }
+    }
+  }
+  return res.json(ok({ ...formatTask(updated), dataRequest, emailed, emailError },
+    emailError ? `Saved, but the email could not be sent: ${emailError}` : (emailed ? "Data requested and emailed" : "Data request saved")));
 });
 
 // DELETE /api/admin/tasks/:taskId/missing-data-request — clear it

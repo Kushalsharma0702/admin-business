@@ -1,7 +1,7 @@
 import { createFileRoute, useParams, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAppStore, uid } from "@/store/useAppStore";
-import { clientsApi, tasksApi, metaApi, generalDocsAdminApi, profilesAdminApi, onboardingAdminApi, clientTakeOnAdminApi, notesAdminApi, taskDetailApi, taskDocsApi, assignableAdminsApi, ADMIN_STATUSES, type ApiTask, type AdminStatus, type TaskTypeInfo, type GeneralDocField, type GeneralDocStatus, type UserProfile, type OnboardingSection, type OnboardingField, type ConfigFieldDef, type ClientNote, type TaskComment, type TaskAttachment, type DueRule, type ChaserSchedule, type TaskDocRequest, type MissingDataRequest } from "@/lib/api";
+import { clientsApi, tasksApi, metaApi, generalDocsAdminApi, profilesAdminApi, onboardingAdminApi, clientTakeOnAdminApi, notesAdminApi, taskDetailApi, taskDocsApi, assignableAdminsApi, ADMIN_STATUSES, type ApiTask, type AdminStatus, type TaskTypeInfo, type GeneralDocField, type GeneralDocStatus, type UserProfile, type OnboardingSection, type OnboardingField, type ConfigFieldDef, type ClientNote, type TaskComment, type TaskAttachment, type DueRule, type ChaserSchedule, type TaskDocRequest, type MissingDataRequest, type DataRequest } from "@/lib/api";
 import { GeneralDocsConfig } from "@/components/app/GeneralDocsConfig";
 import { DueRuleField } from "@/components/app/DueRuleField";
 import { ChaserScheduleField } from "@/components/app/ChaserScheduleField";
@@ -428,6 +428,11 @@ function Tasks({ clientId }: { clientId: string }) {
     { period: "", note: "", outstandingKeys: [] }
   );
   const [missingBusy, setMissingBusy] = useState(false);
+  // The admin's own wording for each outstanding field (copies; the document requests themselves are untouched).
+  const [missingNames, setMissingNames] = useState<Record<string, string>>({});
+  // The first "Request Data" (before any data has arrived): period + note to the client.
+  const [requestData, setRequestData] = useState<{ period: string; note: string }>({ period: "", note: "" });
+  const [requestBusy, setRequestBusy] = useState(false);
   // The outstanding list follows the per-request "Mark as done" toggles until
   // the admin ticks/unticks it by hand or a missing-data request was already
   // saved for this task. Without this the default was fixed at the moment the
@@ -442,6 +447,12 @@ function Tasks({ clientId }: { clientId: string }) {
       return JSON.stringify(m.outstandingKeys) === JSON.stringify(next) ? m : { ...m, outstandingKeys: next };
     });
   }, [notDoneKeys, outstandingTouched, hadSavedMissingRequest]);
+  useEffect(() => {
+    if (editForm.adminStatus === "Partial Data received") {
+      setMissing((m) => (m.note.trim() ? m : { ...m, note: DEFAULT_MISSING_NOTE }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editForm.adminStatus]);
   const [savingEdit, setSavingEdit] = useState(false);
   const [downloadingZip, setDownloadingZip] = useState(false);
 
@@ -647,6 +658,11 @@ function Tasks({ clientId }: { clientId: string }) {
     const mdr = t.metadata?.missingDataRequest as MissingDataRequest | undefined;
     setOutstandingTouched(false);
     setHadSavedMissingRequest(!!mdr);
+    setMissingNames(Object.fromEntries((mdr?.items ?? []).map((it) => [it.key, it.name])));
+    const bp = (t.metadata as { bookkeepingPeriod?: { start?: string; end?: string } } | undefined)?.bookkeepingPeriod;
+    const dr = t.metadata?.dataRequest as DataRequest | undefined;
+    const periodText = dr?.period ?? (bp?.start && bp?.end ? `${fmtDate(bp.start)} – ${fmtDate(bp.end)}` : "");
+    setRequestData({ period: periodText, note: dr?.note ?? defaultRequestNote(periodText) });
     setMissing({
       period: mdr?.period ?? "",
       note: mdr?.note ?? "",
@@ -738,6 +754,26 @@ function Tasks({ clientId }: { clientId: string }) {
     }
   };
 
+  const sendRequestData = async (sendEmail: boolean) => {
+    if (!editing) return;
+    setRequestBusy(true);
+    try {
+      const res = await taskDocsApi.requestData(editing.id, {
+        period: requestData.period.trim() || undefined,
+        note: requestData.note.trim() || undefined,
+        sendEmail,
+      });
+      if (res.data.emailError) toast.warning(res.message);
+      else toast.success(sendEmail ? "Data requested and emailed to the client" : "Data request saved");
+      queryClient.invalidateQueries({ queryKey: ["task-docs", editing.id] });
+      invalidateTasks();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not request the data");
+    } finally {
+      setRequestBusy(false);
+    }
+  };
+
   const saveMissingData = async (sendEmail: boolean) => {
     if (!editing) return;
     if (!missing.period.trim() && !missing.note.trim() && missing.outstandingKeys.length === 0) {
@@ -750,6 +786,9 @@ function Tasks({ clientId }: { clientId: string }) {
         period: missing.period.trim() || undefined,
         note: missing.note.trim() || undefined,
         outstandingKeys: missing.outstandingKeys,
+        items: missing.outstandingKeys
+          .map((key) => ({ key, name: (missingNames[key] ?? "").trim() }))
+          .filter((it) => it.name && it.name !== (editDocRequests.find((r) => r.key === it.key)?.name ?? "")),
         sendEmail,
       });
       // The request saves even when the email fails — the server says which.
@@ -771,6 +810,7 @@ function Tasks({ clientId }: { clientId: string }) {
     try {
       await taskDocsApi.clearMissingDataRequest(editing.id);
       setMissing({ period: "", note: "", outstandingKeys: [] });
+      setMissingNames({});
       toast.success("Missing-data request cleared");
       queryClient.invalidateQueries({ queryKey: ["task-docs", editing.id] });
       invalidateTasks();
@@ -1278,6 +1318,45 @@ function Tasks({ clientId }: { clientId: string }) {
                     />
                   </div>
 
+                  {/* ── Request data (first request, before any data has arrived) ──
+                      Sends the document fields above to the client with a note and the
+                      bookkeeping period. Reminders then repeat the same note. */}
+                  {editDocRequests.some((r) => r.key) && editForm.adminStatus !== "Partial Data received" && !editing.closedAt && (
+                    <div className="rounded-md border border-primary/30 bg-primary/5 p-3 space-y-3">
+                      <div>
+                        <p className="text-sm font-medium">Request data from the client</p>
+                        <p className="text-xs text-muted-foreground">
+                          Emails the client the document fields listed above that are not marked done. Uses the requests saved
+                          on this task — press Save changes first if you have just edited them.
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Period requested</label>
+                        <Input className="mt-1" value={requestData.period} placeholder="e.g. Oct 1 – Oct 31"
+                          onChange={(e) => setRequestData((r) => ({ ...r, period: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Note to the client</label>
+                        <Textarea className="mt-1" rows={3} value={requestData.note}
+                          onChange={(e) => setRequestData((r) => ({ ...r, note: e.target.value }))} />
+                      </div>
+                      {(editing.metadata?.dataRequest as DataRequest | undefined)?.requestedAt && (
+                        <p className="text-[11px] text-muted-foreground">
+                          Last requested {fmtDate((editing.metadata?.dataRequest as DataRequest).requestedAt!)}.
+                        </p>
+                      )}
+                      <div className="flex flex-wrap gap-2">
+                        <Button size="sm" disabled={requestBusy} onClick={() => sendRequestData(true)}>
+                          {requestBusy && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
+                          <Send className="w-3.5 h-3.5 mr-1" />Request Data
+                        </Button>
+                        <Button size="sm" variant="outline" disabled={requestBusy} onClick={() => sendRequestData(false)}>
+                          Save without emailing
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
                   {/* ── Missing data (opens on "Partial Data received") ──
                       Narrows the ask to what is still outstanding and switches
                       the chaser emails from "send your documents" to "we are
@@ -1322,6 +1401,21 @@ function Tasks({ clientId }: { clientId: string }) {
                               </label>
                             ))}
                           </div>
+                          {missing.outstandingKeys.length > 0 && (
+                            <div className="mt-2 space-y-1.5">
+                              <p className="text-[11px] text-muted-foreground">
+                                What the client is asked for (edit the wording, e.g. "Bank - 0049 - Oct 1 to 15 Data missing"). The original requests above are not changed.
+                              </p>
+                              {editDocRequests.filter((r) => r.key && missing.outstandingKeys.includes(r.key)).map((r) => (
+                                <Input
+                                  key={r.key} className="h-8 text-sm"
+                                  value={missingNames[r.key!] ?? r.name ?? ""}
+                                  onChange={(e) => setMissingNames((n) => ({ ...n, [r.key!]: e.target.value }))}
+                                  aria-label={`Wording for ${r.name || r.key}`}
+                                />
+                              ))}
+                            </div>
+                          )}
                         </div>
                       )}
 
@@ -1346,7 +1440,7 @@ function Tasks({ clientId }: { clientId: string }) {
                       <div className="flex flex-wrap gap-2">
                         <Button size="sm" disabled={missingBusy} onClick={() => saveMissingData(true)}>
                           {missingBusy && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
-                          <Send className="w-3.5 h-3.5 mr-1" />Save &amp; email client
+                          <Send className="w-3.5 h-3.5 mr-1" />Request Documents
                         </Button>
                         <Button size="sm" variant="outline" disabled={missingBusy} onClick={() => saveMissingData(false)}>
                           Save without emailing
@@ -1917,6 +2011,11 @@ function ServiceDetailTab({ clientId, tab }: { clientId: string; tab: string }) 
   );
 }
 
+// Default "note to the client" wording (editable by the admin).
+const defaultRequestNote = (period?: string) =>
+  period ? `Please upload the requested data for the period ${period}.` : "Please upload the requested data.";
+const DEFAULT_MISSING_NOTE = "We have received your data, but some of it is missing. Please upload the items listed below.";
+
 // Local calendar tomorrow as YYYY-MM-DD, for the future-only date picker's `min`.
 function tomorrowYMD(): string {
   const d = new Date();
@@ -1987,6 +2086,14 @@ function GeneralDocs({ clientId }: { clientId: string }) {
     requestReuploadMutation.mutate({ uploadId, reason: reason.trim() || undefined });
   };
 
+  const [zipBusy, setZipBusy] = useState(false);
+  const downloadAllGeneralDocs = async () => {
+    setZipBusy(true);
+    try { await generalDocsAdminApi.downloadArchive(clientId, "general_documents.zip"); }
+    catch (err) { toast.error(err instanceof Error ? err.message : "Could not build the archive"); }
+    finally { setZipBusy(false); }
+  };
+
   const startEdit = () => {
     setDraft({
       enabled: status?.enabled ?? true,
@@ -2024,6 +2131,12 @@ function GeneralDocs({ clientId }: { clientId: string }) {
                status.overall === "partial"   ? "Partial uploads" :
                status.overall === "not_required" ? "Not configured" : "Pending"}
             </span>
+          )}
+          {status?.enabled && !editing && (
+            <Button size="sm" variant="outline" disabled={zipBusy} onClick={downloadAllGeneralDocs}>
+              {zipBusy ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Download className="w-3.5 h-3.5 mr-1" />}
+              Download all (ZIP)
+            </Button>
           )}
           {!editing && (
             <Button size="sm" variant="outline" onClick={startEdit}>

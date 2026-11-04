@@ -4,7 +4,8 @@ const multer  = require("multer");
 const db      = require("../db");
 const { fail, ok } = require("../helpers");
 const { requireAuth } = require("../middleware/auth");
-const { getDownloadUrl, putObject, buildS3Key, sendReuploadRequestEmail } = require("../config/aws");
+const { getDownloadUrl, getObjectBuffer, putObject, buildS3Key, sendReuploadRequestEmail } = require("../config/aws");
+const { buildZip } = require("../zip");
 const env = require("../config/env");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -225,6 +226,35 @@ adminRouter.put("/clients/:clientId/general-docs", async (req, res) => {
     fields:    cfg.fields,
     updatedAt: cfg.updated_at,
   }, "General documentation config saved"));
+});
+
+// GET /api/admin/clients/:clientId/general-docs/archive
+// Every uploaded general document of the client as one .zip (files named <field>_<slot>_<file>, so they sort by document field).
+adminRouter.get("/clients/:clientId/general-docs/archive", async (req, res) => {
+  const { rows: [client] } = await db.query(
+    "SELECT id, name FROM users WHERE (id::text=$1 OR slug=$1) AND role='client'", [req.params.clientId]);
+  if (!client) return res.status(404).json(fail("Client not found"));
+  const [config, uploads] = await Promise.all([getConfigForClient(client.id), getUploadsForClient(client.id)]);
+  const files = uploads.filter((u) => u.s3_key);
+  if (!files.length) return res.status(404).json(fail("This client has no uploaded documents yet"));
+
+  const fieldName = (key) => ((config?.fields || []).find((f) => f.key === key)?.name || key).replace(/[\\/:*?"<>|]+/g, "_");
+  const entries = [], failed = [];
+  for (const u of files) {
+    try {
+      const data = await getObjectBuffer({ bucket: u.s3_bucket, key: u.s3_key });
+      entries.push({ name: `${fieldName(u.field_key)}_${u.slot_index}_${u.original_filename || u.file_name}`, data, date: u.uploaded_at });
+    } catch (err) { console.error(`General-docs zip: could not read ${u.s3_key}:`, err.message); failed.push(u.original_filename || u.file_name); }
+  }
+  if (!entries.length) return res.status(502).json(fail("None of this client's files could be read from storage"));
+  let zip;
+  try { zip = buildZip(entries); } catch (err) { return res.status(413).json(fail(err.message)); }
+  const safe = String(client.name || "client").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 60);
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", `attachment; filename="${safe}_general_documents.zip"`);
+  res.setHeader("Content-Length", String(zip.length));
+  if (failed.length) res.setHeader("X-Skipped-Files", String(failed.length));
+  return res.end(zip);
 });
 
 // DELETE /api/admin/general-docs/uploads/:uploadId

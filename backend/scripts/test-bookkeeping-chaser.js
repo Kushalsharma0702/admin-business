@@ -37,6 +37,25 @@ const tick = async (iso) => { const n = sent.length; await runChaserSweep(new Da
       await db.query("UPDATE tasks SET last_reminder_sent_at=NULL WHERE client_id=$1", [uid]);
       eq("closed task is NEVER chased again", await tick("2026-11-06T15:00:00Z"), 0);
     }
+    // The reminder repeats the admin's first "Request Data" (note, period, document list) ...
+    await db.query("DELETE FROM tasks WHERE client_id=$1", [uid]);
+    const reqs = [{ key: "bank_0010", name: "Bank 0010", done: true }, { key: "bank_0547", name: "Bank 0547", done: false }, { key: "cc_visa", name: "Visa 1234", done: false }];
+    const { rows: [rt] } = await db.query(
+      "INSERT INTO tasks (client_id,title,task_type,admin_status,config,metadata,open_date) VALUES ($1,'Req','BOOKKEEPING','Data not received',$2,$3,CURRENT_DATE - 5) RETURNING id",
+      [uid, JSON.stringify({ bookkeepingFrequency: "Monthly" }), JSON.stringify({ documentRequests: reqs, dataRequest: { note: "Upload your October data", period: "Oct 1 - Oct 31" } })]);
+    if (inMonthlyWindow) {
+      eq("reminder #1 is sent", await tick("2026-11-04T14:00:00Z"), 1);
+      const a = sent[sent.length - 1];
+      eq("...it repeats the admin's note and period", [a.missingDataNote, a.missingDataPeriod, a.isMissingData], ["Upload your October data", "Oct 1 - Oct 31", false]);
+      eq("...and lists only the fields not yet done", a.missingItems, ["Bank 0547", "Visa 1234"]);
+      // ... and once partial data arrived it switches to the missing-data wording with the admin's edited names
+      await db.query("UPDATE tasks SET last_reminder_sent_at=NULL, admin_status='Partial Data received', metadata = metadata || $2::jsonb WHERE id=$1",
+        [rt.id, JSON.stringify({ missingDataRequest: { note: "Some are missing", period: "Oct 1 to 15", outstandingKeys: ["bank_0547"], items: [{ key: "bank_0547", name: "Bank - 0547 - Oct 1 to 15 Data missing" }] } })]);
+      eq("partial data: next reminder uses the missing-data wording", await tick("2026-11-04T14:30:00Z"), 1);
+      const b = sent[sent.length - 1];
+      eq("...with the missing-data note, period and the ADMIN'S edited item name", [b.isMissingData, b.missingDataNote, b.missingDataPeriod, b.missingItems], [true, "Some are missing", "Oct 1 to 15", ["Bank - 0547 - Oct 1 to 15 Data missing"]]);
+    }
+
     // Weekly: generated on Thursday (open_date), first chaser the NEXT day (Friday).
     await db.query("DELETE FROM tasks WHERE client_id=$1", [uid]);
     const mkWeekly = async (openOffsetDays) => (await db.query(
