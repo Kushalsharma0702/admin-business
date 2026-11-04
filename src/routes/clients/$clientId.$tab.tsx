@@ -428,6 +428,20 @@ function Tasks({ clientId }: { clientId: string }) {
     { period: "", note: "", outstandingKeys: [] }
   );
   const [missingBusy, setMissingBusy] = useState(false);
+  // The outstanding list follows the per-request "Mark as done" toggles until
+  // the admin ticks/unticks it by hand or a missing-data request was already
+  // saved for this task. Without this the default was fixed at the moment the
+  // dialog opened, so marking a request done afterwards left it ticked as missing.
+  const [outstandingTouched, setOutstandingTouched] = useState(false);
+  const [hadSavedMissingRequest, setHadSavedMissingRequest] = useState(false);
+  const notDoneKeys = editDocRequests.filter((r) => r.key && !r.done).map((r) => r.key as string).join("|");
+  useEffect(() => {
+    if (outstandingTouched || hadSavedMissingRequest) return;
+    setMissing((m) => {
+      const next = notDoneKeys ? notDoneKeys.split("|") : [];
+      return JSON.stringify(m.outstandingKeys) === JSON.stringify(next) ? m : { ...m, outstandingKeys: next };
+    });
+  }, [notDoneKeys, outstandingTouched, hadSavedMissingRequest]);
   const [savingEdit, setSavingEdit] = useState(false);
   const [downloadingZip, setDownloadingZip] = useState(false);
 
@@ -631,6 +645,8 @@ function Tasks({ clientId }: { clientId: string }) {
     const requests = (t.metadata?.documentRequests as Partial<TaskDocRequest>[] | undefined) ?? [];
     setEditDocRequests(requests.map(toRequestDraft));
     const mdr = t.metadata?.missingDataRequest as MissingDataRequest | undefined;
+    setOutstandingTouched(false);
+    setHadSavedMissingRequest(!!mdr);
     setMissing({
       period: mdr?.period ?? "",
       note: mdr?.note ?? "",
@@ -1281,12 +1297,12 @@ function Tasks({ clientId }: { clientId: string }) {
                                   type="checkbox"
                                   className="h-4 w-4 accent-primary"
                                   checked={missing.outstandingKeys.includes(r.key!)}
-                                  onChange={(e) => setMissing((m) => ({
+                                  onChange={(e) => { setOutstandingTouched(true); setMissing((m) => ({
                                     ...m,
                                     outstandingKeys: e.target.checked
                                       ? [...new Set([...m.outstandingKeys, r.key!])]
                                       : m.outstandingKeys.filter((k) => k !== r.key),
-                                  }))}
+                                  })); }}
                                 />
                                 <span>{r.name || r.key}</span>
                               </label>
