@@ -48,6 +48,7 @@ function formatClientTask(row) {
     taxYear:         row.tax_year ?? null,
     status:          row.status,
     description:     row.description ?? null,
+    bookkeepingPeriod: require("../task-details-service").clientBookkeepingPeriod(row),
     createdAt:       row.created_at,
     updatedAt:       row.updated_at,
   };

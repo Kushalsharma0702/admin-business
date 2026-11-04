@@ -7,6 +7,15 @@ const { getWorkflowMetadata } = require("./workflow-metadata");
 
 const { buildDocumentRequirements } = require("./document-requirements");
 
+// The period of the data being requested (e.g. a Bookkeeping task's 1 Oct - 31 Oct). The only
+// piece of task metadata a client sees; everything else in metadata is admin-internal.
+function clientBookkeepingPeriod(row) {
+  let m = row.metadata;
+  if (typeof m === "string") { try { m = JSON.parse(m); } catch { m = null; } }
+  const bp = m && m.bookkeepingPeriod;
+  return bp && bp.start && bp.end ? { start: bp.start, end: bp.end } : null;
+}
+
 function formatClientTaskBase(row) {
   return {
     id:             row.id,
@@ -19,6 +28,7 @@ function formatClientTaskBase(row) {
     taxYear:        row.tax_year ?? null,
     status:         row.status,
     description:    row.description ?? null,
+    bookkeepingPeriod: clientBookkeepingPeriod(row),
     createdAt:      row.created_at,
     updatedAt:      row.updated_at,
   };
@@ -171,4 +181,4 @@ async function buildClientTaskDetails(task, clientId) {
   };
 }
 
-module.exports = { buildClientTaskDetails };
+module.exports = { buildClientTaskDetails, clientBookkeepingPeriod };

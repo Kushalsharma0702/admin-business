@@ -12,7 +12,7 @@
 // Cadences:
 //  - Monthly/Quarterly bookkeeping: first data-request from the 1st of the
 //    month, chasers every 2 days through the 10th.
-//  - Weekly bookkeeping: one data-request once the task's open date arrives.
+//  - Weekly bookkeeping: tasks are generated on Thursday; one data-request on Friday.
 //  - Yearly bookkeeping: first email from the 1st of the month after
 //    year-end, chasers every 5 days for ~1.5 months (45 days).
 //  - Query / HST-approval reminders: twice, 3 days apart, stopping as soon as
@@ -148,7 +148,9 @@ async function runWeeklyChaser(today, now) {
        AND open_date >= $3`,
     [
       AWAITING_DATA_STATUSES,
-      today.toISOString().slice(0, 10),
+      // Weekly tasks are generated on Thursday; the first chaser goes out the next
+      // day (Friday), so a task is eligible once its open date is at least a day old.
+      new Date(today.getTime() - 86400000).toISOString().slice(0, 10),
       new Date(today.getTime() - WEEKLY_CATCHUP_DAYS * 86400000).toISOString().slice(0, 10),
     ]
   );

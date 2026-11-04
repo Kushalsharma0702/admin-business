@@ -1236,6 +1236,20 @@ function Tasks({ clientId }: { clientId: string }) {
                     </div>
                   </div>
 
+                  {/* Bookkeeping period: set automatically when the task is generated (not editable). */}
+                  {(() => {
+                    const bp = (editing.metadata as { bookkeepingPeriod?: { start?: string; end?: string } } | undefined)?.bookkeepingPeriod;
+                    return bp?.start && bp?.end ? (
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Bookkeeping period</label>
+                        <p className="mt-1 text-sm">
+                          {fmtDate(bp.start)} – {fmtDate(bp.end)}
+                          <span className="ml-2 text-xs text-muted-foreground">auto-calculated; the client sees this period</span>
+                        </p>
+                      </div>
+                    ) : null;
+                  })()}
+
                   {editSchema.length > 0 && (
                     <div className="rounded-md border border-border p-3 space-y-3 bg-muted/30">
                       <div className="text-xs font-semibold text-foreground uppercase tracking-wide">
