@@ -1321,13 +1321,14 @@ function Tasks({ clientId }: { clientId: string }) {
                   {/* ── Request data (first request, before any data has arrived) ──
                       Sends the document fields above to the client with a note and the
                       bookkeeping period. Reminders then repeat the same note. */}
-                  {editDocRequests.some((r) => r.key) && editForm.adminStatus !== "Partial Data received" && !editing.closedAt && (
+                  {editForm.adminStatus !== "Partial Data received" && !editing.closedAt && (
                     <div className="rounded-md border border-primary/30 bg-primary/5 p-3 space-y-3">
                       <div>
                         <p className="text-sm font-medium">Request data from the client</p>
                         <p className="text-xs text-muted-foreground">
                           Emails the client the document fields listed above that are not marked done. Uses the requests saved
                           on this task — press Save changes first if you have just edited them.
+                          {!editDocRequests.some((r) => r.key) && " (Add and save at least one document request above to enable this.)"}
                         </p>
                       </div>
                       <div>
@@ -1346,11 +1347,11 @@ function Tasks({ clientId }: { clientId: string }) {
                         </p>
                       )}
                       <div className="flex flex-wrap gap-2">
-                        <Button size="sm" disabled={requestBusy} onClick={() => sendRequestData(true)}>
+                        <Button size="sm" disabled={requestBusy || !editDocRequests.some((r) => r.key)} onClick={() => sendRequestData(true)}>
                           {requestBusy && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
                           <Send className="w-3.5 h-3.5 mr-1" />Request Data
                         </Button>
-                        <Button size="sm" variant="outline" disabled={requestBusy} onClick={() => sendRequestData(false)}>
+                        <Button size="sm" variant="outline" disabled={requestBusy || !editDocRequests.some((r) => r.key)} onClick={() => sendRequestData(false)}>
                           Save without emailing
                         </Button>
                       </div>
