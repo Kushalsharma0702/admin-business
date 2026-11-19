@@ -96,6 +96,7 @@ export interface ApiTask {
   clientProgress: string | null;
   dueDate: string | null;
   openDate: string | null;
+  periodEnd: string | null;
   taxYear: number | null;
   config: Record<string, unknown>;
   metadata: Record<string, unknown>;

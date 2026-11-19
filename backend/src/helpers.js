@@ -67,6 +67,7 @@ function formatTask(row) {
     clientProgress:    row.client_progress ?? null,
     dueDate:           row.due_date ?? null,
     openDate:          row.open_date ?? null,
+    periodEnd:         row.period_end ?? null,
     taxYear:           row.tax_year ?? null,
     config:            row.config ?? {},
     metadata:          row.metadata ?? {},

@@ -5,6 +5,15 @@
 // open_date and due_date (and recur) instead of admins entering dates by hand.
 //
 // Pure + dependency-free. All dates are handled as UTC 'YYYY-MM-DD' strings.
+// `today`, when not supplied by the caller (tests always supply it), defaults
+// to the current Atlantic calendar day (see send-window.js's atlanticToday) —
+// NOT `new Date()` read with plain UTC getters, and NOT whichever timezone
+// the acting admin/employee happens to be in. The business these tasks are
+// for runs on Atlantic time; a task shouldn't open/close a day early or late
+// just because generation was triggered from India during the few hours each
+// evening where the UTC calendar date has already rolled over but it isn't
+// tomorrow yet in Halifax.
+const { atlanticToday } = require("./send-window");
 
 const HORIZON_YEARS = 2;
 const BACKFILL_GRACE_DAYS = 120;
@@ -73,7 +82,7 @@ function t2Periods(config, today) {
     const ye = safeYearEnd(fye, y);
     const open = firstOfMonth(addMonths(ye, -2)); // 3 months before, first of month
     const due = addMonths(ye, 3);
-    if (isActive(open, due, today)) out.push(period(`T2:${ymd(ye)}`, ye.getUTCFullYear(), open, due));
+    if (isActive(open, due, today)) out.push({ ...period(`T2:${ymd(ye)}`, ye.getUTCFullYear(), open, due), periodEnd: ymd(ye) });
   }
   return out;
 }
@@ -94,7 +103,7 @@ function installmentPeriods(config, today, enabledKey, yearEndKey, prefix) {
 }
 
 function hstPeriod(keyDate, open, due) {
-  return period(`HST:${ymd(keyDate)}`, keyDate.getUTCFullYear(), open, due);
+  return { ...period(`HST:${ymd(keyDate)}`, keyDate.getUTCFullYear(), open, due), periodEnd: ymd(keyDate) };
 }
 
 // A period is current for exactly its own working window: from the day it
@@ -427,7 +436,7 @@ function bookkeepingPeriods(config, today) {
 
 // Compute open/due for a single filing task from its config (for manual creation).
 // Returns { openDate, dueDate } (most-recent active period) or {} if not derivable.
-function computeDatesForTask(taskType, config = {}, today = new Date()) {
+function computeDatesForTask(taskType, config = {}, today = atlanticToday()) {
   const gen = { CORPORATE_TAX_RETURN: t2Periods, HST: hstPeriods, BOOKKEEPING: bookkeepingPeriods }[taskType];
   if (!gen) return {};
   const periods = gen(config, today).sort((a, b) => (a.openDate < b.openDate ? 1 : -1));
@@ -437,7 +446,7 @@ function computeDatesForTask(taskType, config = {}, today = new Date()) {
 // Plan all currently-active filing tasks for a client's service config.
 // `config` may hold fields for several types at once. Returns period descriptors
 // tagged with taskType, for the caller to upsert (dedup on periodKey).
-function planFilingTasks(config = {}, today = new Date()) {
+function planFilingTasks(config = {}, today = atlanticToday()) {
   const out = [];
   if (config.t2Enabled || config.fiscalYearEnd) {
     for (const p of t2Periods(config, today)) out.push({ taskType: "CORPORATE_TAX_RETURN", ...p });

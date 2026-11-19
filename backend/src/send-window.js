@@ -165,11 +165,23 @@ function atlanticDateKey(date = new Date()) {
   return key(p.year, p.month, p.day);
 }
 
+// Today's Atlantic calendar date, as a UTC-midnight Date of that same Y-M-D.
+// For feeding into date-math that's written in terms of UTC 'YYYY-MM-DD'
+// strings/Date.UTC (schedule.js) — so "today" for task open/due-date
+// generation is whichever calendar day it actually is in Atlantic Canada,
+// not whichever one the server's OS clock (UTC) or an acting user's own
+// timezone happens to be on.
+function atlanticToday(date = new Date()) {
+  const p = atlanticParts(date);
+  return new Date(Date.UTC(p.year, p.month - 1, p.day));
+}
+
 module.exports = {
   ZONE,
   canSendAt,
   atlanticParts,
   atlanticDateKey,
+  atlanticToday,
   canadianHolidays,
   isCanadianHoliday,
   FIRST_SEND_HOUR,

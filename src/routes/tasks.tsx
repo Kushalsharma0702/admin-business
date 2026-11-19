@@ -43,6 +43,8 @@ function TasksPage() {
   const [adminStatusFilter, setAdminStatusFilter] = useState<string>("All");
   const [taskTypeFilter, setTaskTypeFilter] = useState<string>("All");
   const [q, setQ] = useState("");
+  const [periodEndFrom, setPeriodEndFrom] = useState("");
+  const [periodEndTo, setPeriodEndTo] = useState("");
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["admin-tasks"],
@@ -56,6 +58,8 @@ function TasksPage() {
   const filtered = all.filter((t) =>
     (adminStatusFilter === "All" || t.adminStatus === adminStatusFilter) &&
     (taskTypeFilter === "All" || t.taskType === taskTypeFilter) &&
+    (!periodEndFrom || (!!t.periodEnd && t.periodEnd >= periodEndFrom)) &&
+    (!periodEndTo || (!!t.periodEnd && t.periodEnd <= periodEndTo)) &&
     (t.title.toLowerCase().includes(q.toLowerCase()) || (t.clientName ?? "").toLowerCase().includes(q.toLowerCase()))
   );
 
@@ -85,6 +89,20 @@ function TasksPage() {
           <option value="All">All task types</option>
           {taskTypes.map((tt) => <option key={tt} value={tt}>{tt}</option>)}
         </select>
+        <div className="flex items-center gap-1.5 text-sm">
+          <span className="text-muted-foreground">Period end</span>
+          <Input type="date" value={periodEndFrom} onChange={(e) => setPeriodEndFrom(e.target.value)}
+            className="h-9 w-[150px]" aria-label="Period end from" />
+          <span className="text-muted-foreground">to</span>
+          <Input type="date" value={periodEndTo} onChange={(e) => setPeriodEndTo(e.target.value)}
+            className="h-9 w-[150px]" aria-label="Period end to" />
+          {(periodEndFrom || periodEndTo) && (
+            <button onClick={() => { setPeriodEndFrom(""); setPeriodEndTo(""); }}
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">
+              Clear
+            </button>
+          )}
+        </div>
       </div>
 
       {isLoading && (
@@ -107,6 +125,7 @@ function TasksPage() {
                 <th className="text-left px-4 py-2.5">Task</th>
                 <th className="text-left px-4 py-2.5">Client</th>
                 <th className="text-left px-4 py-2.5">Type</th>
+                <th className="text-left px-4 py-2.5">Period End</th>
                 <th className="text-left px-4 py-2.5">Client Status</th>
                 <th className="text-left px-4 py-2.5">Assigned</th>
               </tr>
@@ -127,12 +146,13 @@ function TasksPage() {
                     )}
                   </td>
                   <td className="px-4 py-2.5 text-muted-foreground">{t.taskType ?? "—"}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground">{t.periodEnd ? fmtDate(t.periodEnd) : "—"}</td>
                   <td className="px-4 py-2.5"><ClientStatusBadge status={t.status} /></td>
                   <td className="px-4 py-2.5 text-muted-foreground">{fmtDate(t.createdAt)}</td>
                 </tr>
               ))}
               {filtered.length === 0 && (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No tasks found</td></tr>
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No tasks found</td></tr>
               )}
             </tbody>
           </table>

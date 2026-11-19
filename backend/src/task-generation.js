@@ -26,7 +26,10 @@ function dateOnly(value) {
 // metadata.periodKey per client, and re-syncs the due date of open tasks whose
 // period is still planned. Returns { created, count, skipped, rescheduled }.
 async function generateTasksForClient(clientId, config, assignedById) {
-  const planned = schedule.planFilingTasks(config || {}, new Date());
+  // today omitted on purpose: schedule.planFilingTasks defaults to the
+  // current Atlantic calendar day, not whichever one UTC (or the caller's
+  // own timezone) happens to be on.
+  const planned = schedule.planFilingTasks(config || {});
 
   const { rows: existing } = await db.query(
     `SELECT id, metadata->>'periodKey' AS pk, due_date, closed_at
@@ -59,15 +62,15 @@ async function generateTasksForClient(clientId, config, assignedById) {
     if (p.periodStart && p.periodEnd) metadata.bookkeepingPeriod = { start: p.periodStart, end: p.periodEnd };
     const { rows: [task] } = await db.query(
       `INSERT INTO tasks
-         (client_id, assigned_by, title, task_type, admin_status, metadata, config, tax_year, due_date, open_date)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+         (client_id, assigned_by, title, task_type, admin_status, metadata, config, tax_year, due_date, open_date, period_end)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
       [
         clientId, assignedById || null,
         wf ? wf.displayName : p.taskType,
         p.taskType, "Data not received",
         JSON.stringify(metadata),
         JSON.stringify(config || {}),
-        p.taxYear, p.dueDate, p.openDate,
+        p.taxYear, p.dueDate, p.openDate, p.periodEnd || null,
       ]
     );
     if (wf) await initializeSubtasks(task.id, p.taskType);
