@@ -78,9 +78,12 @@ export interface ApiTask {
   id: string;
   clientId: string;
   assignedBy: string | null;
-  /** Owning staff member — distinct from assignedBy (who gave it to the client). */
+  /** "Processing team" — distinct from assignedBy (who gave it to the client). */
   assignedTo: string | null;
   assignedToName: string | null;
+  /** "Support team" — a second, independent assignee alongside assignedTo. */
+  supportAssignedTo: string | null;
+  supportAssignedToName: string | null;
   /** Admin-side "done". Independent of status/completedAt, which are the client's. */
   closedAt: string | null;
   closedBy: string | null;
@@ -446,6 +449,7 @@ export const tasksApi = {
     priority?: TaskPriority;
     adminStatus?: AdminStatus | string;
     assignedTo?: string | null;
+    supportAssignedTo?: string | null;
     config?: Record<string, unknown>; metadata?: object;
     formFields?: ConfigFieldDef[];
     documentRequirements?: { key: string; quantity: number }[];
@@ -456,7 +460,7 @@ export const tasksApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  update: (taskId: string, body: { adminStatus?: string; title?: string; description?: string | null; status?: string; dueDate?: string | null; openDate?: string | null; assignedTo?: string | null; config?: Record<string, unknown>; documentRequirements?: { key: string; quantity: number }[]; documentRequests?: Partial<TaskDocRequest>[]; metadata?: object }) =>
+  update: (taskId: string, body: { adminStatus?: string; title?: string; description?: string | null; status?: string; dueDate?: string | null; openDate?: string | null; assignedTo?: string | null; supportAssignedTo?: string | null; config?: Record<string, unknown>; documentRequirements?: { key: string; quantity: number }[]; documentRequests?: Partial<TaskDocRequest>[]; metadata?: object }) =>
     request<{ success: boolean; data: ApiTaskWithConfig }>(`/api/admin/tasks/${taskId}`, {
       method: "PATCH",
       body: JSON.stringify(body),

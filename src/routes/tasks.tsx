@@ -38,6 +38,18 @@ function ClientStatusBadge({ status }: { status: string }) {
     : <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-medium">Pending</span>;
 }
 
+// Which config key holds "how often" depends on the task type - Corporate Tax
+// (filing + its installments) doesn't have one, it's just tied to fiscal year end.
+function taskFrequency(t: ApiTask): string {
+  const c = t.config as Record<string, unknown> | undefined;
+  const key = t.taskType === "BOOKKEEPING" ? "bookkeepingFrequency"
+    : t.taskType === "HST" || t.taskType === "HST_QUARTERLY_PAYMENT" ? "salesTaxFrequency"
+    : t.taskType === "PAYROLL" ? "payrollFrequency"
+    : null;
+  const v = key ? c?.[key] : undefined;
+  return typeof v === "string" && v ? v : "—";
+}
+
 function TasksPage() {
   const navigate = useNavigate();
   const [adminStatusFilter, setAdminStatusFilter] = useState<string>("All");
@@ -125,9 +137,12 @@ function TasksPage() {
                 <th className="text-left px-4 py-2.5">Task</th>
                 <th className="text-left px-4 py-2.5">Client</th>
                 <th className="text-left px-4 py-2.5">Type</th>
+                <th className="text-left px-4 py-2.5">Frequency</th>
                 <th className="text-left px-4 py-2.5">Period End</th>
+                <th className="text-left px-4 py-2.5">Due Date</th>
                 <th className="text-left px-4 py-2.5">Client Status</th>
-                <th className="text-left px-4 py-2.5">Assigned</th>
+                <th className="text-left px-4 py-2.5">Processing Team</th>
+                <th className="text-left px-4 py-2.5">Support Team</th>
               </tr>
             </thead>
             <tbody>
@@ -146,13 +161,16 @@ function TasksPage() {
                     )}
                   </td>
                   <td className="px-4 py-2.5 text-muted-foreground">{t.taskType ?? "—"}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground">{taskFrequency(t)}</td>
                   <td className="px-4 py-2.5 text-muted-foreground">{t.periodEnd ? fmtDate(t.periodEnd) : "—"}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground">{t.dueDate ? fmtDate(t.dueDate) : "—"}</td>
                   <td className="px-4 py-2.5"><ClientStatusBadge status={t.status} /></td>
-                  <td className="px-4 py-2.5 text-muted-foreground">{fmtDate(t.createdAt)}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground">{t.assignedToName ?? "—"}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground">{t.supportAssignedToName ?? "—"}</td>
                 </tr>
               ))}
               {filtered.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No tasks found</td></tr>
+                <tr><td colSpan={10} className="px-4 py-8 text-center text-muted-foreground">No tasks found</td></tr>
               )}
             </tbody>
           </table>

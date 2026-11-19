@@ -319,8 +319,12 @@ router.get("/tasks", async (req, res) => {
 
   const [{ rows }, { rows: cnt }] = await Promise.all([
     db.query(
-      `SELECT t.*, u.name AS client_name, u.email AS client_email
-       FROM tasks t JOIN users u ON t.client_id=u.id
+      `SELECT t.*, u.name AS client_name, u.email AS client_email,
+              a.name AS assigned_to_name, s.name AS support_assigned_to_name
+       FROM tasks t
+       JOIN users u ON t.client_id=u.id
+       LEFT JOIN users a ON t.assigned_to=a.id
+       LEFT JOIN users s ON t.support_assigned_to=s.id
        ${where} ORDER BY t.created_at DESC LIMIT $${i++} OFFSET $${i++}`,
       [...args, per_page, offset]
     ),
@@ -351,9 +355,10 @@ router.get("/clients/:clientId/tasks", async (req, res) => {
   if (!client) return res.status(404).json(fail("Client not found"));
 
   const SELECT = `
-    SELECT t.*, a.name AS assigned_to_name, c.name AS closed_by_name
+    SELECT t.*, a.name AS assigned_to_name, s.name AS support_assigned_to_name, c.name AS closed_by_name
     FROM tasks t
     LEFT JOIN users a ON t.assigned_to = a.id
+    LEFT JOIN users s ON t.support_assigned_to = s.id
     LEFT JOIN users c ON t.closed_by   = c.id`;
 
   const closedParam = req.query.closed;
@@ -429,6 +434,8 @@ router.post("/clients/:clientId/tasks", async (req, res) => {
 
   const assignedTo = await resolveAssignee(b.assignedTo);
   if (assignedTo === INVALID_ASSIGNEE) return res.status(400).json(fail("assignedTo is not an active admin"));
+  const supportAssignedTo = await resolveAssignee(b.supportAssignedTo);
+  if (supportAssignedTo === INVALID_ASSIGNEE) return res.status(400).json(fail("supportAssignedTo is not an active admin"));
 
   const adminStatus = b.adminStatus && ADMIN_STATUSES.includes(b.adminStatus)
     ? b.adminStatus
@@ -457,13 +464,13 @@ router.post("/clients/:clientId/tasks", async (req, res) => {
 
   const { rows: [task] } = await db.query(
     `INSERT INTO tasks
-       (client_id, assigned_by, assigned_to, template_id, template_version_id,
+       (client_id, assigned_by, assigned_to, support_assigned_to, template_id, template_version_id,
         title, description, instructions, task_type, admin_status, metadata, config,
         tax_year, due_date, open_date, priority)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
      RETURNING *`,
     [
-      client.id, req.user.sub, assignedTo,
+      client.id, req.user.sub, assignedTo, supportAssignedTo,
       b.templateId || null, b.templateVersionId || null,
       title, b.description || null, instructions,
       taskType,
@@ -548,6 +555,12 @@ router.patch("/tasks/:taskId", async (req, res) => {
     sets.push(`assigned_to=$${i++}`);
     vals.push(assignedTo);
   }
+  if ("supportAssignedTo" in b) {
+    const supportAssignedTo = await resolveAssignee(b.supportAssignedTo);
+    if (supportAssignedTo === INVALID_ASSIGNEE) return res.status(400).json(fail("supportAssignedTo is not an active admin"));
+    sets.push(`support_assigned_to=$${i++}`);
+    vals.push(supportAssignedTo);
+  }
   if ("config" in b) {
     sets.push(`config=$${i++}`);
     vals.push(JSON.stringify(mergeConfigUpdate(
@@ -586,7 +599,11 @@ router.patch("/tasks/:taskId", async (req, res) => {
   if ("documentRequests" in b) changes.push("document requests updated");
   if ("assignedTo" in b && (updated.assigned_to || null) !== (existing.assigned_to || null)) {
     const { rows: [who] } = await db.query("SELECT name FROM users WHERE id=$1", [updated.assigned_to]);
-    changes.push(`assignee → ${who?.name || "(unassigned)"}`);
+    changes.push(`processing team → ${who?.name || "(unassigned)"}`);
+  }
+  if ("supportAssignedTo" in b && (updated.support_assigned_to || null) !== (existing.support_assigned_to || null)) {
+    const { rows: [who] } = await db.query("SELECT name FROM users WHERE id=$1", [updated.support_assigned_to]);
+    changes.push(`support team → ${who?.name || "(unassigned)"}`);
   }
   if (changes.length) {
     await logActivity(updated.id, "task_edited", req.user.sub, changes.join("; "));
@@ -595,8 +612,11 @@ router.patch("/tasks/:taskId", async (req, res) => {
   // Re-read with the assignee/closer names joined on, so the caller's cache
   // gets the same shape the list endpoint returns.
   const { rows: [withNames] } = await db.query(
-    `SELECT t.*, a.name AS assigned_to_name, c.name AS closed_by_name
-     FROM tasks t LEFT JOIN users a ON t.assigned_to=a.id LEFT JOIN users c ON t.closed_by=c.id
+    `SELECT t.*, a.name AS assigned_to_name, s.name AS support_assigned_to_name, c.name AS closed_by_name
+     FROM tasks t
+     LEFT JOIN users a ON t.assigned_to=a.id
+     LEFT JOIN users s ON t.support_assigned_to=s.id
+     LEFT JOIN users c ON t.closed_by=c.id
      WHERE t.id=$1`,
     [updated.id]
   );

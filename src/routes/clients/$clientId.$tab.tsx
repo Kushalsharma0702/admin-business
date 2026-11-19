@@ -419,7 +419,7 @@ function Tasks({ clientId }: { clientId: string }) {
   const [editing, setEditing] = useState<ApiTask | null>(null);
   const [editForm, setEditForm] = useState({
     title: "", adminStatus: "Data not received" as AdminStatus,
-    description: "", openDate: "", dueDate: "", assignedTo: "",
+    description: "", openDate: "", dueDate: "", assignedTo: "", supportAssignedTo: "",
   });
   const [editConfig, setEditConfig] = useState<Record<string, unknown>>({});
   const [editDocRequests, setEditDocRequests] = useState<RequestDraft[]>([]);
@@ -651,6 +651,7 @@ function Tasks({ clientId }: { clientId: string }) {
       openDate: toDateInput(t.openDate),
       dueDate: toDateInput(t.dueDate),
       assignedTo: t.assignedTo ?? "",
+      supportAssignedTo: t.supportAssignedTo ?? "",
     });
     setEditConfig({ ...(t.config ?? {}) });
     const requests = (t.metadata?.documentRequests as Partial<TaskDocRequest>[] | undefined) ?? [];
@@ -704,6 +705,7 @@ function Tasks({ clientId }: { clientId: string }) {
         openDate: editForm.openDate || null,
         dueDate: editForm.dueDate || null,
         assignedTo: editForm.assignedTo || null,
+        supportAssignedTo: editForm.supportAssignedTo || null,
         documentRequests: editDocRequests,
         ...(Object.keys(configPayload).length > 0 ? { config: configPayload } : {}),
       });
@@ -1237,13 +1239,23 @@ function Tasks({ clientId }: { clientId: string }) {
                     {/* Read-only: changing the type would orphan the subtasks already created for this task. */}
                     <Input value={editing.taskType ?? "—"} disabled className="mt-1" />
                   </div>
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Assignee</label>
-                    <select className="mt-1 w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
-                      value={editForm.assignedTo} onChange={(e) => setEditForm({ ...editForm, assignedTo: e.target.value })}>
-                      <option value="">Unassigned</option>
-                      {assignableAdmins.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                    </select>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Processing team</label>
+                      <select className="mt-1 w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
+                        value={editForm.assignedTo} onChange={(e) => setEditForm({ ...editForm, assignedTo: e.target.value })}>
+                        <option value="">Unassigned</option>
+                        {assignableAdmins.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Support team</label>
+                      <select className="mt-1 w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
+                        value={editForm.supportAssignedTo} onChange={(e) => setEditForm({ ...editForm, supportAssignedTo: e.target.value })}>
+                        <option value="">Unassigned</option>
+                        {assignableAdmins.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                      </select>
+                    </div>
                   </div>
                   <div>
                     <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Status of the task</label>
