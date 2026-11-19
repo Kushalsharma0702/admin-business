@@ -1290,7 +1290,12 @@ function Tasks({ clientId }: { clientId: string }) {
                     ) : null;
                   })()}
 
-                  {editSchema.length > 0 && (
+                  {/* Bookkeeping's config fields (frequency/quarter option) are deliberately
+                      not shown here - they duplicate the auto-calculated, read-only
+                      "Bookkeeping period" above, and editing them per-task doesn't make
+                      sense (frequency is a client-level setting, set on the Bookkeeping
+                      tab / Client Take-On, not per generated task). */}
+                  {editSchema.length > 0 && editing.taskType !== "BOOKKEEPING" && (
                     <div className="rounded-md border border-border p-3 space-y-3 bg-muted/30">
                       <div className="text-xs font-semibold text-foreground uppercase tracking-wide">
                         {workflowTypes.find((t) => t.key === editing.taskType)?.displayName} details
