@@ -48,6 +48,9 @@ function bookkeepingConfigFromAnswers(rawAnswers) {
   if (answers.bookkeeping_due_rule && typeof answers.bookkeeping_due_rule === "object") {
     config.bookkeepingDueRule = answers.bookkeeping_due_rule;
   }
+  if (Array.isArray(answers.bookkeeping_document_requests) && answers.bookkeeping_document_requests.length) {
+    config.documentRequests = answers.bookkeeping_document_requests;
+  }
   return config;
 }
 
@@ -237,6 +240,18 @@ const CLIENT_TAKE_ON_SCHEMA = {
         {
           key: "accounting_software_other", label: "Accounting Software (please specify)", type: "text",
           dependsOn: { field: "accounting_software", value: "Others" },
+        },
+        // Which documents to ask for on every recurring Bookkeeping task this
+        // client gets going forward (see bookkeepingConfigFromAnswers below,
+        // and generateTasksForClient's use of config.documentRequests). Each
+        // new Bookkeeping task is seeded with a copy of this list at creation
+        // time; the task's own panel shows it read-only from then on - this
+        // tab is the only place it's edited. Existing already-generated tasks
+        // keep whatever list they were created with; changing this does not
+        // retroactively touch them.
+        {
+          key: "bookkeeping_document_requests", label: "Documents requested", type: "documentRequests",
+          placeholder: "What every new Bookkeeping task should ask the client to upload.",
         },
       ],
     },

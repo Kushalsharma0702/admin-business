@@ -1311,17 +1311,49 @@ function Tasks({ clientId }: { clientId: string }) {
                     </div>
                   )}
 
-                  {/* ── Documents requested from the client ── */}
-                  <div className="rounded-md border border-border p-3 bg-muted/30">
-                    <TaskDocRequestsConfig
-                      value={editDocRequests}
-                      onChange={setEditDocRequests}
-                      requirements={docsData?.data.requirements}
-                      onDownload={handleDownloadTaskDoc}
-                      onDownloadAll={handleDownloadAllDocs}
-                      downloadingAll={downloadingZip}
-                    />
-                  </div>
+                  {/* ── Documents requested from the client ──
+                      For Bookkeeping, this list is set on the client's Bookkeeping
+                      tab (applies to new tasks going forward) - shown here read-only,
+                      not editable per task. Other task types keep the full editor. */}
+                  {editing.taskType === "BOOKKEEPING" ? (
+                    <div className="rounded-md border border-border p-3 bg-muted/30 space-y-2">
+                      <p className="text-sm font-medium">Documents requested</p>
+                      <p className="text-xs text-muted-foreground">
+                        Set on this client's Bookkeeping tab, not editable per task.
+                      </p>
+                      {editDocRequests.length === 0 ? (
+                        <p className="text-xs text-muted-foreground py-1">
+                          No documents requested — the client sees no upload section for this task.
+                        </p>
+                      ) : (
+                        <ul className="space-y-1">
+                          {editDocRequests.map((f, i) => {
+                            const live = f.key ? docsData?.data.requirements.find((r) => r.key === f.key) : undefined;
+                            return (
+                              <li key={f.key ?? i} className="flex items-center justify-between text-sm border-b border-border last:border-0 pb-1 last:pb-0">
+                                <span>{f.name}</span>
+                                <span className="text-xs text-muted-foreground">
+                                  {f.required ? "Required" : "Optional"}
+                                  {live && ` · ${live.uploadedCount} uploaded`}
+                                </span>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="rounded-md border border-border p-3 bg-muted/30">
+                      <TaskDocRequestsConfig
+                        value={editDocRequests}
+                        onChange={setEditDocRequests}
+                        requirements={docsData?.data.requirements}
+                        onDownload={handleDownloadTaskDoc}
+                        onDownloadAll={handleDownloadAllDocs}
+                        downloadingAll={downloadingZip}
+                      />
+                    </div>
+                  )}
 
                   {/* ── Request data (first request, before any data has arrived) ──
                       Sends the document fields above to the client with a note and the
@@ -1957,7 +1989,22 @@ function ServiceDetailTab({ clientId, tab }: { clientId: string; tab: string }) 
       <Card className="p-5">
         <div className="space-y-3">
           {visibleFields.map((f) => (
-            <div key={f.key} className="grid grid-cols-1 sm:grid-cols-[260px_1fr] gap-1 sm:gap-4 text-sm border-b border-border last:border-0 pb-3 last:pb-0">
+            <div
+              key={f.key}
+              className={f.type === "documentRequests"
+                ? "border-b border-border last:border-0 pb-3 last:pb-0"
+                : "grid grid-cols-1 sm:grid-cols-[260px_1fr] gap-1 sm:gap-4 text-sm border-b border-border last:border-0 pb-3 last:pb-0"}
+            >
+              {f.type === "documentRequests" ? (
+                <>
+                  <TaskDocRequestsConfig
+                    value={(values[f.key] as RequestDraft[] | undefined) ?? []}
+                    onChange={(v) => set(f.key, v)}
+                  />
+                  {f.placeholder && <p className="text-xs text-muted-foreground mt-1.5">{f.placeholder}</p>}
+                </>
+              ) : (
+              <>
               <label className="text-muted-foreground pt-2">{f.label}{f.required ? " *" : ""}</label>
               <div>
                 {f.type === "duerule" ? (
@@ -2000,6 +2047,8 @@ function ServiceDetailTab({ clientId, tab }: { clientId: string; tab: string }) 
                   <Input value={String(values[f.key] ?? "")} onChange={(e) => set(f.key, e.target.value)} />
                 )}
               </div>
+              </>
+              )}
             </div>
           ))}
         </div>
