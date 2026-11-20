@@ -57,6 +57,11 @@ function TasksPage() {
   const [q, setQ] = useState("");
   const [periodEndFrom, setPeriodEndFrom] = useState("");
   const [periodEndTo, setPeriodEndTo] = useState("");
+  const [dueDateFrom, setDueDateFrom] = useState("");
+  const [dueDateTo, setDueDateTo] = useState("");
+  const [frequencyFilter, setFrequencyFilter] = useState("All");
+  const [processingTeamFilter, setProcessingTeamFilter] = useState("All");
+  const [supportTeamFilter, setSupportTeamFilter] = useState("All");
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["admin-tasks"],
@@ -67,11 +72,19 @@ function TasksPage() {
 
   const all: ApiTask[] = data?.data ?? [];
   const taskTypes = Array.from(new Set(all.map((t) => t.taskType).filter((t): t is string => !!t))).sort();
+  const frequencies = Array.from(new Set(all.map((t) => taskFrequency(t)).filter((f) => f !== "—"))).sort();
+  const processingTeams = Array.from(new Set(all.map((t) => t.assignedToName).filter((n): n is string => !!n))).sort();
+  const supportTeams = Array.from(new Set(all.map((t) => t.supportAssignedToName).filter((n): n is string => !!n))).sort();
   const filtered = all.filter((t) =>
     (adminStatusFilter === "All" || t.adminStatus === adminStatusFilter) &&
     (taskTypeFilter === "All" || t.taskType === taskTypeFilter) &&
+    (frequencyFilter === "All" || taskFrequency(t) === frequencyFilter) &&
+    (processingTeamFilter === "All" || t.assignedToName === processingTeamFilter) &&
+    (supportTeamFilter === "All" || t.supportAssignedToName === supportTeamFilter) &&
     (!periodEndFrom || (!!t.periodEnd && t.periodEnd >= periodEndFrom)) &&
     (!periodEndTo || (!!t.periodEnd && t.periodEnd <= periodEndTo)) &&
+    (!dueDateFrom || (!!t.dueDate && t.dueDate >= dueDateFrom)) &&
+    (!dueDateTo || (!!t.dueDate && t.dueDate <= dueDateTo)) &&
     (t.title.toLowerCase().includes(q.toLowerCase()) || (t.clientName ?? "").toLowerCase().includes(q.toLowerCase()))
   );
 
@@ -101,6 +114,30 @@ function TasksPage() {
           <option value="All">All task types</option>
           {taskTypes.map((tt) => <option key={tt} value={tt}>{tt}</option>)}
         </select>
+        <select
+          value={frequencyFilter}
+          onChange={(e) => setFrequencyFilter(e.target.value)}
+          className="h-9 text-sm border border-border rounded-md px-2 bg-background text-foreground"
+        >
+          <option value="All">All frequencies</option>
+          {frequencies.map((f) => <option key={f} value={f}>{f}</option>)}
+        </select>
+        <select
+          value={processingTeamFilter}
+          onChange={(e) => setProcessingTeamFilter(e.target.value)}
+          className="h-9 text-sm border border-border rounded-md px-2 bg-background text-foreground"
+        >
+          <option value="All">All processing team</option>
+          {processingTeams.map((n) => <option key={n} value={n}>{n}</option>)}
+        </select>
+        <select
+          value={supportTeamFilter}
+          onChange={(e) => setSupportTeamFilter(e.target.value)}
+          className="h-9 text-sm border border-border rounded-md px-2 bg-background text-foreground"
+        >
+          <option value="All">All support team</option>
+          {supportTeams.map((n) => <option key={n} value={n}>{n}</option>)}
+        </select>
         <div className="flex items-center gap-1.5 text-sm">
           <span className="text-muted-foreground">Period end</span>
           <Input type="date" value={periodEndFrom} onChange={(e) => setPeriodEndFrom(e.target.value)}
@@ -110,6 +147,20 @@ function TasksPage() {
             className="h-9 w-[150px]" aria-label="Period end to" />
           {(periodEndFrom || periodEndTo) && (
             <button onClick={() => { setPeriodEndFrom(""); setPeriodEndTo(""); }}
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">
+              Clear
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 text-sm">
+          <span className="text-muted-foreground">Due date</span>
+          <Input type="date" value={dueDateFrom} onChange={(e) => setDueDateFrom(e.target.value)}
+            className="h-9 w-[150px]" aria-label="Due date from" />
+          <span className="text-muted-foreground">to</span>
+          <Input type="date" value={dueDateTo} onChange={(e) => setDueDateTo(e.target.value)}
+            className="h-9 w-[150px]" aria-label="Due date to" />
+          {(dueDateFrom || dueDateTo) && (
+            <button onClick={() => { setDueDateFrom(""); setDueDateTo(""); }}
               className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">
               Clear
             </button>
