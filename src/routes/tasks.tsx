@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ListPage } from "@/components/app/ListPage";
 import { ClientAvatar } from "@/components/app/ClientAvatar";
 import { Input } from "@/components/ui/input";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { tasksApi, assignableAdminsApi, ADMIN_STATUSES, type ApiTask } from "@/lib/api";
 import { Loader2, WifiOff } from "lucide-react";
 import { fmtDate } from "@/components/app/utils";
@@ -36,6 +36,30 @@ function ClientStatusBadge({ status }: { status: string }) {
   return status === "complete"
     ? <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-medium">Complete</span>
     : <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-medium">Pending</span>;
+}
+
+// A heading above its control, so it's clear which filter is which even once
+// a value is picked (a bare <select> only shows the selected text, not what
+// it's a filter FOR).
+function FilterField({ heading, children }: { heading: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">{heading}</span>
+      {children}
+    </div>
+  );
+}
+
+// Removable tag for a currently-applied filter - lets the admin see every
+// active filter at a glance (not just whichever dropdown/input they're
+// looking at) and clear one without hunting for its control.
+function FilterTag({ label, onClear }: { label: string; onClear: () => void }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-xs bg-primary/10 text-primary rounded-full pl-2.5 pr-1 py-1 font-medium">
+      {label}
+      <button onClick={onClear} aria-label={`Clear ${label} filter`} className="rounded-full hover:bg-primary/20 w-4 h-4 inline-flex items-center justify-center">×</button>
+    </span>
+  );
 }
 
 // Which config key holds "how often" depends on the task type - Corporate Tax
@@ -111,69 +135,103 @@ function TasksPage() {
         ))}
       </div>
 
-      <div className="flex flex-wrap items-center gap-3 mb-4">
-        <Input placeholder="Search tasks or client…" value={q} onChange={(e) => setQ(e.target.value)} className="max-w-sm" />
-        <select
-          value={taskTypeFilter}
-          onChange={(e) => setTaskTypeFilter(e.target.value)}
-          className="h-9 text-sm border border-border rounded-md px-2 bg-background text-foreground"
-        >
-          <option value="All">All task types</option>
-          {taskTypes.map((tt) => <option key={tt} value={tt}>{tt}</option>)}
-        </select>
-        <select
-          value={frequencyFilter}
-          onChange={(e) => setFrequencyFilter(e.target.value)}
-          className="h-9 text-sm border border-border rounded-md px-2 bg-background text-foreground"
-        >
-          <option value="All">All frequencies</option>
-          {frequencies.map((f) => <option key={f} value={f}>{f}</option>)}
-        </select>
-        <select
-          value={processingTeamFilter}
-          onChange={(e) => setProcessingTeamFilter(e.target.value)}
-          className="h-9 text-sm border border-border rounded-md px-2 bg-background text-foreground"
-        >
-          <option value="All">All processing team</option>
-          {teamNames.map((n) => <option key={n} value={n}>{n}</option>)}
-        </select>
-        <select
-          value={supportTeamFilter}
-          onChange={(e) => setSupportTeamFilter(e.target.value)}
-          className="h-9 text-sm border border-border rounded-md px-2 bg-background text-foreground"
-        >
-          <option value="All">All support team</option>
-          {teamNames.map((n) => <option key={n} value={n}>{n}</option>)}
-        </select>
-        <div className="flex items-center gap-1.5 text-sm">
-          <span className="text-muted-foreground">Period end</span>
-          <Input type="date" value={periodEndFrom} onChange={(e) => setPeriodEndFrom(e.target.value)}
-            className="h-9 w-[150px]" aria-label="Period end from" />
-          <span className="text-muted-foreground">to</span>
-          <Input type="date" value={periodEndTo} onChange={(e) => setPeriodEndTo(e.target.value)}
-            className="h-9 w-[150px]" aria-label="Period end to" />
-          {(periodEndFrom || periodEndTo) && (
-            <button onClick={() => { setPeriodEndFrom(""); setPeriodEndTo(""); }}
-              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">
-              Clear
-            </button>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5 text-sm">
-          <span className="text-muted-foreground">Due date</span>
-          <Input type="date" value={dueDateFrom} onChange={(e) => setDueDateFrom(e.target.value)}
-            className="h-9 w-[150px]" aria-label="Due date from" />
-          <span className="text-muted-foreground">to</span>
-          <Input type="date" value={dueDateTo} onChange={(e) => setDueDateTo(e.target.value)}
-            className="h-9 w-[150px]" aria-label="Due date to" />
-          {(dueDateFrom || dueDateTo) && (
-            <button onClick={() => { setDueDateFrom(""); setDueDateTo(""); }}
-              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">
-              Clear
-            </button>
-          )}
-        </div>
+      <div className="flex flex-wrap items-end gap-3 mb-3">
+        <FilterField heading="Search">
+          <Input placeholder="Search tasks or client…" value={q} onChange={(e) => setQ(e.target.value)} className="max-w-sm h-9" />
+        </FilterField>
+        <FilterField heading="Task type">
+          <select
+            value={taskTypeFilter}
+            onChange={(e) => setTaskTypeFilter(e.target.value)}
+            className="h-9 text-sm border border-border rounded-md px-2 bg-background text-foreground"
+          >
+            <option value="All">All task types</option>
+            {taskTypes.map((tt) => <option key={tt} value={tt}>{tt}</option>)}
+          </select>
+        </FilterField>
+        <FilterField heading="Frequency">
+          <select
+            value={frequencyFilter}
+            onChange={(e) => setFrequencyFilter(e.target.value)}
+            className="h-9 text-sm border border-border rounded-md px-2 bg-background text-foreground"
+          >
+            <option value="All">All frequencies</option>
+            {frequencies.map((f) => <option key={f} value={f}>{f}</option>)}
+          </select>
+        </FilterField>
+        <FilterField heading="Processing team">
+          <select
+            value={processingTeamFilter}
+            onChange={(e) => setProcessingTeamFilter(e.target.value)}
+            className="h-9 text-sm border border-border rounded-md px-2 bg-background text-foreground"
+          >
+            <option value="All">All processing team</option>
+            {teamNames.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </FilterField>
+        <FilterField heading="Support team">
+          <select
+            value={supportTeamFilter}
+            onChange={(e) => setSupportTeamFilter(e.target.value)}
+            className="h-9 text-sm border border-border rounded-md px-2 bg-background text-foreground"
+          >
+            <option value="All">All support team</option>
+            {teamNames.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </FilterField>
+        <FilterField heading="Period end">
+          <div className="flex items-center gap-1.5 text-sm">
+            <Input type="date" value={periodEndFrom} onChange={(e) => setPeriodEndFrom(e.target.value)}
+              className="h-9 w-[150px]" aria-label="Period end from" />
+            <span className="text-muted-foreground">to</span>
+            <Input type="date" value={periodEndTo} onChange={(e) => setPeriodEndTo(e.target.value)}
+              className="h-9 w-[150px]" aria-label="Period end to" />
+          </div>
+        </FilterField>
+        <FilterField heading="Due date">
+          <div className="flex items-center gap-1.5 text-sm">
+            <Input type="date" value={dueDateFrom} onChange={(e) => setDueDateFrom(e.target.value)}
+              className="h-9 w-[150px]" aria-label="Due date from" />
+            <span className="text-muted-foreground">to</span>
+            <Input type="date" value={dueDateTo} onChange={(e) => setDueDateTo(e.target.value)}
+              className="h-9 w-[150px]" aria-label="Due date to" />
+          </div>
+        </FilterField>
       </div>
+
+      {/* Active-filter tags - what's actually applied, at a glance, each clearable on its own */}
+      {(taskTypeFilter !== "All" || frequencyFilter !== "All" || processingTeamFilter !== "All" || supportTeamFilter !== "All"
+        || periodEndFrom || periodEndTo || dueDateFrom || dueDateTo || q) && (
+        <div className="flex flex-wrap items-center gap-1.5 mb-4">
+          {q && <FilterTag label={`Search: ${q}`} onClear={() => setQ("")} />}
+          {taskTypeFilter !== "All" && <FilterTag label={`Type: ${taskTypeFilter}`} onClear={() => setTaskTypeFilter("All")} />}
+          {frequencyFilter !== "All" && <FilterTag label={`Frequency: ${frequencyFilter}`} onClear={() => setFrequencyFilter("All")} />}
+          {processingTeamFilter !== "All" && <FilterTag label={`Processing team: ${processingTeamFilter}`} onClear={() => setProcessingTeamFilter("All")} />}
+          {supportTeamFilter !== "All" && <FilterTag label={`Support team: ${supportTeamFilter}`} onClear={() => setSupportTeamFilter("All")} />}
+          {(periodEndFrom || periodEndTo) && (
+            <FilterTag
+              label={`Period end: ${periodEndFrom || "…"} to ${periodEndTo || "…"}`}
+              onClear={() => { setPeriodEndFrom(""); setPeriodEndTo(""); }}
+            />
+          )}
+          {(dueDateFrom || dueDateTo) && (
+            <FilterTag
+              label={`Due date: ${dueDateFrom || "…"} to ${dueDateTo || "…"}`}
+              onClear={() => { setDueDateFrom(""); setDueDateTo(""); }}
+            />
+          )}
+          <button
+            onClick={() => {
+              setQ(""); setTaskTypeFilter("All"); setFrequencyFilter("All");
+              setProcessingTeamFilter("All"); setSupportTeamFilter("All");
+              setPeriodEndFrom(""); setPeriodEndTo(""); setDueDateFrom(""); setDueDateTo("");
+            }}
+            className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 ml-1"
+          >
+            Clear all
+          </button>
+        </div>
+      )}
 
       {isLoading && (
         <div className="flex items-center gap-2 text-muted-foreground py-8 justify-center">
