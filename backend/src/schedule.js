@@ -400,7 +400,16 @@ function specBookkeepingPeriods(config, today, start, freq) {
   const dueFor = (periodEnd, fallback) => bookkeepingDueDate(config, periodEnd, fallback);
 
   if (freq === "weekly") {
-    for (let g = thursdayOnOrAfter(start), i = 0; ymd(g) <= t && i < 600; g = addDays(g, 7), i++) {
+    // Monthly/quarterly/yearly always have at least one period showing as soon
+    // as the client is set up, because their lead time (15th of the month
+    // before, etc.) puts the generation date well in the past even when the
+    // client's first date is still ahead. Weekly has no such lead - the
+    // anchor Thursday can itself be days away - so without this, a client
+    // whose first date hasn't reached its Thursday yet would show no task at
+    // all under Tasks until it does. Match the others: the first upcoming
+    // period always shows (i === 0), even though it "starts later"; only
+    // later periods wait for their own Thursday to actually arrive.
+    for (let g = thursdayOnOrAfter(start), i = 0; (i === 0 || ymd(g) <= t) && i < 600; g = addDays(g, 7), i++) {
       const periodStart = addDays(g, -10);          // Monday of the previous week
       const periodEnd = addDays(g, -6);             // Friday of the previous week
       const chaserFriday = addDays(g, 1);

@@ -30,7 +30,13 @@ eq("yearly: next one 15 Dec 2027 (period = 2027)", first(Y, "2027-12-15").start 
 
 // ── Weekly: generated Thursday, chaser Friday, due the next Friday, period = Mon-Fri of the previous week ──
 const W = { bookkeepingFrequency: "Weekly", bookkeepingFirstDate: "2026-11-09" };   // a Monday
-eq("weekly: nothing before the first Thursday (Wed 11 Nov)", plan(W, "2026-11-11"), []);
+// Unlike monthly/quarterly/yearly (whose lead time already puts the
+// generation date in the past the moment the client is set up), weekly's
+// anchor Thursday can itself still be ahead - the first upcoming period
+// shows right away anyway, exactly like the others, even a day before its
+// own Thursday actually arrives.
+eq("weekly: first upcoming period shows immediately, even a day before its own Thursday (Wed 11 Nov)",
+  first(W, "2026-11-11"), { key: "BOOKKEEPING:2026-11-02", start: "2026-11-02", end: "2026-11-06", open: "2026-11-12", due: "2026-11-20" });
 const w1 = first(W, "2026-11-12");                                                  // Thursday
 eq("weekly: generated THURSDAY 12 Nov", w1.open, "2026-11-12");
 eq("weekly: period = Monday-Friday of the previous week (2-6 Nov)", [w1.start, w1.end], ["2026-11-02", "2026-11-06"]);
