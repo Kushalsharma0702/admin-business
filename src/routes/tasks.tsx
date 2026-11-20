@@ -4,7 +4,7 @@ import { ListPage } from "@/components/app/ListPage";
 import { ClientAvatar } from "@/components/app/ClientAvatar";
 import { Input } from "@/components/ui/input";
 import { useState } from "react";
-import { tasksApi, ADMIN_STATUSES, type ApiTask } from "@/lib/api";
+import { tasksApi, assignableAdminsApi, ADMIN_STATUSES, type ApiTask } from "@/lib/api";
 import { Loader2, WifiOff } from "lucide-react";
 import { fmtDate } from "@/components/app/utils";
 
@@ -69,12 +69,19 @@ function TasksPage() {
     staleTime: 15_000,
     refetchInterval: 30_000,
   });
+  const { data: adminsRes } = useQuery({
+    queryKey: ["assignable-admins"],
+    queryFn: () => assignableAdminsApi.list(),
+    staleTime: 60_000,
+  });
+  const assignableAdmins = adminsRes?.data ?? [];
 
   const all: ApiTask[] = data?.data ?? [];
   const taskTypes = Array.from(new Set(all.map((t) => t.taskType).filter((t): t is string => !!t))).sort();
   const frequencies = Array.from(new Set(all.map((t) => taskFrequency(t)).filter((f) => f !== "—"))).sort();
-  const processingTeams = Array.from(new Set(all.map((t) => t.assignedToName).filter((n): n is string => !!n))).sort();
-  const supportTeams = Array.from(new Set(all.map((t) => t.supportAssignedToName).filter((n): n is string => !!n))).sort();
+  // Every admin/superadmin, not just the ones already assigned to a task -
+  // the same roster the task edit panel's Processing/Support team dropdowns use.
+  const teamNames = assignableAdmins.map((a) => a.name).sort();
   const filtered = all.filter((t) =>
     (adminStatusFilter === "All" || t.adminStatus === adminStatusFilter) &&
     (taskTypeFilter === "All" || t.taskType === taskTypeFilter) &&
@@ -128,7 +135,7 @@ function TasksPage() {
           className="h-9 text-sm border border-border rounded-md px-2 bg-background text-foreground"
         >
           <option value="All">All processing team</option>
-          {processingTeams.map((n) => <option key={n} value={n}>{n}</option>)}
+          {teamNames.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
         <select
           value={supportTeamFilter}
@@ -136,7 +143,7 @@ function TasksPage() {
           className="h-9 text-sm border border-border rounded-md px-2 bg-background text-foreground"
         >
           <option value="All">All support team</option>
-          {supportTeams.map((n) => <option key={n} value={n}>{n}</option>)}
+          {teamNames.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
         <div className="flex items-center gap-1.5 text-sm">
           <span className="text-muted-foreground">Period end</span>
