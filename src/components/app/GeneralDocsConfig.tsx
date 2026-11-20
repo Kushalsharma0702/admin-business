@@ -13,20 +13,23 @@ import { Plus, Trash2, GripVertical, ChevronDown, ChevronUp } from "lucide-react
 import type { GeneralDocField } from "@/lib/api";
 
 const FILE_TYPE_OPTIONS = ["pdf", "jpg", "jpeg", "png", "xls", "xlsx", "doc", "docx", "csv"];
+// Every field accepts all file types and any number of files (backend caps at
+// MAX_FILES slots); the client's uploads come back as a zip.
+const MAX_FILES = 50;
 
 const SUGGESTED_FIELDS: Omit<GeneralDocField, "displayOrder">[] = [
-  { key: "business_bank_statements",        name: "Business Bank Statements",              placeholder: "Upload bank statements",                        required: true,  maxCount: 3, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
-  { key: "business_credit_card",            name: "Business Credit Card Statements",       placeholder: "Upload credit card statements",                 required: true,  maxCount: 3, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
-  { key: "loan_statements",                 name: "Loan Statements",                       placeholder: "Upload loan statements",                        required: true,  maxCount: 2, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
-  { key: "loc_statement",                   name: "Line of Credit Statement",              placeholder: "Upload line of credit statement",               required: true,  maxCount: 1, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
-  { key: "purchase_expense",                name: "Purchase / Expense Details",            placeholder: "Upload expense documents",                      required: true,  maxCount: 5, acceptedTypes: ["pdf","jpg","png","xlsx"],   notes: "" },
-  { key: "certificate_of_incorporation",    name: "Certificate of Incorporation",          placeholder: "Upload certificate of incorporation",           required: true,  maxCount: 1, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
-  { key: "certificate_of_registration",     name: "Certificate of Registration",           placeholder: "Upload certificate of registration",            required: true,  maxCount: 1, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
-  { key: "shareholding_register",           name: "Shareholding Register",                 placeholder: "Upload shareholding register",                  required: true,  maxCount: 1, acceptedTypes: ["pdf","jpg","png","xlsx"],   notes: "" },
-  { key: "franchise_agreement",             name: "Franchise Purchase and Sell Agreement", placeholder: "Upload franchise purchase and sell agreement",   required: true,  maxCount: 1, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
-  { key: "prior_year_accounting_records",   name: "Previous Year Accounting Records",      placeholder: "Upload previous T2 returns & last year financial statements", required: true,  maxCount: 5, acceptedTypes: ["pdf","jpg","png","xlsx"],   notes: "" },
-  { key: "cancelled_cheque",                name: "Cancelled Cheque",                      placeholder: "Upload cancelled cheque",                       required: true,  maxCount: 1, acceptedTypes: ["pdf","jpg","png"],          notes: "" },
-  { key: "sales_invoices",                  name: "Sales Invoices",                        placeholder: "Upload sales invoices",                         required: true,  maxCount: 5, acceptedTypes: ["pdf","jpg","png","xlsx"],   notes: "" },
+  { key: "business_bank_statements",        name: "Business Bank Statements",              placeholder: "Upload bank statements",                        required: true,  maxCount: MAX_FILES, acceptedTypes: FILE_TYPE_OPTIONS, notes: "" },
+  { key: "business_credit_card",            name: "Business Credit Card Statements",       placeholder: "Upload credit card statements",                 required: true,  maxCount: MAX_FILES, acceptedTypes: FILE_TYPE_OPTIONS, notes: "" },
+  { key: "loan_statements",                 name: "Loan Statements",                       placeholder: "Upload loan statements",                        required: true,  maxCount: MAX_FILES, acceptedTypes: FILE_TYPE_OPTIONS, notes: "" },
+  { key: "loc_statement",                   name: "Line of Credit Statement",              placeholder: "Upload line of credit statement",               required: true,  maxCount: MAX_FILES, acceptedTypes: FILE_TYPE_OPTIONS, notes: "" },
+  { key: "purchase_expense",                name: "Purchase / Expense Details",            placeholder: "Upload expense documents",                      required: true,  maxCount: MAX_FILES, acceptedTypes: FILE_TYPE_OPTIONS, notes: "" },
+  { key: "certificate_of_incorporation",    name: "Certificate of Incorporation",          placeholder: "Upload certificate of incorporation",           required: true,  maxCount: MAX_FILES, acceptedTypes: FILE_TYPE_OPTIONS, notes: "" },
+  { key: "certificate_of_registration",     name: "Certificate of Registration",           placeholder: "Upload certificate of registration",            required: true,  maxCount: MAX_FILES, acceptedTypes: FILE_TYPE_OPTIONS, notes: "" },
+  { key: "shareholding_register",           name: "Shareholding Register",                 placeholder: "Upload shareholding register",                  required: true,  maxCount: MAX_FILES, acceptedTypes: FILE_TYPE_OPTIONS, notes: "" },
+  { key: "franchise_agreement",             name: "Franchise Purchase and Sell Agreement", placeholder: "Upload franchise purchase and sell agreement",   required: true,  maxCount: MAX_FILES, acceptedTypes: FILE_TYPE_OPTIONS, notes: "" },
+  { key: "prior_year_accounting_records",   name: "Previous Year Accounting Records",      placeholder: "Upload previous T2 returns & last year financial statements", required: true,  maxCount: MAX_FILES, acceptedTypes: FILE_TYPE_OPTIONS, notes: "" },
+  { key: "cancelled_cheque",                name: "Cancelled Cheque",                      placeholder: "Upload cancelled cheque",                       required: true,  maxCount: MAX_FILES, acceptedTypes: FILE_TYPE_OPTIONS, notes: "" },
+  { key: "sales_invoices",                  name: "Sales Invoices",                        placeholder: "Upload sales invoices",                         required: true,  maxCount: MAX_FILES, acceptedTypes: FILE_TYPE_OPTIONS, notes: "" },
 ];
 
 interface Props {
@@ -43,8 +46,8 @@ function toFieldDraft(f: Partial<GeneralDocField>, idx: number): FieldDraft {
     name:         f.name || "",
     placeholder:  f.placeholder || "",
     required:     f.required ?? true,
-    maxCount:     f.maxCount ?? 1,
-    acceptedTypes: f.acceptedTypes ?? ["pdf","jpg","jpeg","png"],
+    maxCount:     MAX_FILES,
+    acceptedTypes: FILE_TYPE_OPTIONS,
     notes:        f.notes || "",
     displayOrder: f.displayOrder ?? idx + 1,
   };
@@ -73,8 +76,7 @@ export function GeneralDocsConfig({ value, onChange, compact }: Props) {
   function addBlank() {
     const draft: FieldDraft = {
       key: "", name: "", placeholder: "",
-      required: true, maxCount: 1, acceptedTypes: ["pdf","jpg","jpeg","png"],
-      notes: "", displayOrder: fields.length + 1,
+      required: true, maxCount: MAX_FILES, acceptedTypes: FILE_TYPE_OPTIONS, notes: "", displayOrder: fields.length + 1,
     };
     // Open the new row (last position) so the name input is reachable.
     setExpanded((e) => ({ ...e, [fields.length]: true }));
@@ -161,7 +163,6 @@ export function GeneralDocsConfig({ value, onChange, compact }: Props) {
                       {f.name || <span className="text-muted-foreground italic">Unnamed field</span>}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      Max {f.maxCount} file{(f.maxCount ?? 1) > 1 ? "s" : ""} ·{" "}
                       {f.required ? (
                         <span className="text-destructive">Required</span>
                       ) : (
@@ -186,88 +187,13 @@ export function GeneralDocsConfig({ value, onChange, compact }: Props) {
                 {expanded[idx] && (
                   <div className="mt-3 grid gap-3 border-t pt-3">
                     <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <Label className="text-xs">Field Name</Label>
-                        <Input
-                          value={f.name || ""}
-                          onChange={(e) => {
-                            const name = e.target.value;
-                            const key = name.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
-                            patchField(idx, { name, key: f.key || key });
-                          }}
-                          placeholder="e.g. Bank Statements"
-                          className="h-8 text-sm"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">Key (auto-generated)</Label>
-                        <Input
-                          value={f.key || ""}
-                          onChange={(e) => patchField(idx, { key: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "") })}
-                          placeholder="bank_statements"
-                          className="h-8 text-sm font-mono"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-1">
-                      <Label className="text-xs">Placeholder</Label>
-                      <Input
-                        value={f.placeholder || ""}
-                        onChange={(e) => patchField(idx, { placeholder: e.target.value })}
-                        placeholder="Instructions shown to client"
-                        className="h-8 text-sm"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <Label className="text-xs">Max Upload Count</Label>
-                        <Input
-                          type="number"
-                          min={1} max={50}
-                          value={f.maxCount ?? 1}
-                          onChange={(e) => patchField(idx, { maxCount: Math.max(1, Math.min(50, Number(e.target.value))) })}
-                          className="h-8 text-sm"
-                        />
-                      </div>
-                      <div className="flex items-center gap-2 pt-5">
+                      <div className="flex items-center gap-2 pt-1">
                         <Switch
                           checked={f.required ?? false}
                           onCheckedChange={(v) => patchField(idx, { required: v })}
                           id={`req-${idx}`}
                         />
                         <Label htmlFor={`req-${idx}`} className="text-xs">Required</Label>
-                      </div>
-                    </div>
-
-                    <div className="space-y-1">
-                      <Label className="text-xs">Accepted File Types</Label>
-                      <div className="flex flex-wrap gap-1.5">
-                        {FILE_TYPE_OPTIONS.map((t) => {
-                          const selected = (f.acceptedTypes ?? []).includes(t);
-                          return (
-                            <button
-                              key={t}
-                              type="button"
-                              onClick={() => {
-                                const cur = f.acceptedTypes ?? [];
-                                patchField(idx, {
-                                  acceptedTypes: selected
-                                    ? cur.filter((x) => x !== t)
-                                    : [...cur, t],
-                                });
-                              }}
-                              className={`text-xs px-2 py-0.5 rounded border transition-colors ${
-                                selected
-                                  ? "bg-primary text-primary-foreground border-primary"
-                                  : "border-border text-muted-foreground hover:border-primary"
-                              }`}
-                            >
-                              .{t}
-                            </button>
-                          );
-                        })}
                       </div>
                     </div>
 

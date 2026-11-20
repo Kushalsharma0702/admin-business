@@ -103,16 +103,15 @@ function normalizeDocumentRequests(input) {
       key = `${key}_${n}`;
     }
     seen.add(key);
-    const accepted = Array.isArray(raw.acceptedTypes)
-      ? raw.acceptedTypes.map((t) => String(t).toLowerCase()).filter((t) => REQUEST_FILE_TYPES.includes(t))
-      : [];
     out.push({
       key,
       name:          name || key,
       placeholder:   String(raw.placeholder || "").trim(),
       required:      raw.required === true,
-      maxCount:      Math.max(1, Math.min(50, Number(raw.maxCount) || 1)),
-      acceptedTypes: accepted.length ? [...new Set(accepted)] : REQUEST_FILE_TYPES,
+      // Policy: every request takes all file types and any number of files
+      // (maxCount null = unlimited); admin-sent maxCount/acceptedTypes are ignored.
+      maxCount:      null,
+      acceptedTypes: REQUEST_FILE_TYPES,
       notes:         String(raw.notes || "").trim(),
       // Admin's per-request "Mark as done": everything NOT done is what a
       // Partial Data received task carries into its missing-data section.
@@ -148,7 +147,7 @@ function getDocumentRequirementsFromTask(task) {
     return requests.map((r) => ({
       key:      r.key,
       label:    r.name,
-      quantity: r.maxCount,
+      quantity: null, // unlimited — see buildDocumentRequirements
       group:    null,
       request:  r,
     }));
@@ -172,11 +171,16 @@ function buildSlots(quantity, docs, categoryKey) {
     };
   }
 
-  return Array.from({ length: quantity }, (_, i) => {
+  // Unlimited request: every used slot plus one free "add another" slot.
+  const unlimited = quantity == null;
+  const used = Object.keys(bySlot).map(Number);
+  const count = unlimited ? Math.max(0, ...used) + 1 : quantity;
+
+  return Array.from({ length: count }, (_, i) => {
     const slotIndex = i + 1;
     return {
       slotIndex,
-      label:        `Upload ${slotIndex} of ${quantity}`,
+      label:        unlimited ? `Upload ${slotIndex}` : `Upload ${slotIndex} of ${quantity}`,
       uploadedFile: bySlot[slotIndex] || null,
       status:       bySlot[slotIndex] ? "uploaded" : "pending",
     };
@@ -195,12 +199,17 @@ async function buildDocumentRequirements(task) {
   return requirements.map((req) => {
     const cat = CATALOG_BY_KEY[req.key];
     const uploaded = docs.filter((d) => d.category === req.key).length;
+    const unlimited = req.quantity == null;
+    // For an unlimited request "quantity" is what has been uploaded (min 1), so
+    // the totals/pending/complete maths downstream still works.
+    const quantity = unlimited ? Math.max(1, uploaded) : req.quantity;
     return {
       key:      req.key,
       label:    req.label,
       group:    req.group,
       category: req.key,
-      quantity: req.quantity,
+      quantity,
+      unlimited,
       required: req.request ? req.request.required : (cat?.required ?? false),
       // Only present for metadata.documentRequests-configured tasks — the
       // Flutter app ignores unknown keys, and uses them when it has them.
@@ -209,7 +218,7 @@ async function buildDocumentRequirements(task) {
       notes:         req.request?.notes ?? null,
       slots:    buildSlots(req.quantity, docs, req.key),
       uploadedCount: uploaded,
-      pendingCount:  Math.max(0, req.quantity - uploaded),
+      pendingCount:  Math.max(0, quantity - uploaded),
     };
   });
 }
@@ -220,7 +229,7 @@ function validateUploadSlot(task, categoryKey, slotIndex) {
   if (!req) return { ok: false, message: `Unknown document category: ${categoryKey}` };
 
   const slot = Number(slotIndex);
-  if (!slot || slot < 1 || slot > req.quantity) {
+  if (!slot || slot < 1 || (req.quantity != null && slot > req.quantity)) {
     return { ok: false, message: `slotIndex must be between 1 and ${req.quantity} for ${req.label}` };
   }
   return { ok: true, requirement: req, slotIndex: slot, acceptedTypes: req.request?.acceptedTypes ?? null };

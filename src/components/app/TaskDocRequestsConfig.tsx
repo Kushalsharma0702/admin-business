@@ -19,16 +19,20 @@ import type { TaskDocRequest, TaskDocRequirement } from "@/lib/api";
 
 const FILE_TYPE_OPTIONS = ["pdf", "jpg", "jpeg", "png", "xls", "xlsx", "doc", "docx", "csv"];
 
-const SUGGESTED: { name: string; maxCount: number; acceptedTypes: string[] }[] = [
-  { name: "Business Bank Statements",        maxCount: 3, acceptedTypes: ["pdf", "jpg", "png"] },
-  { name: "Business Credit Card Statements", maxCount: 3, acceptedTypes: ["pdf", "jpg", "png"] },
-  { name: "Loan Statements",                 maxCount: 2, acceptedTypes: ["pdf", "jpg", "png"] },
-  { name: "Line of Credit Statement",        maxCount: 1, acceptedTypes: ["pdf", "jpg", "png"] },
-  { name: "Purchase / Expense Details",      maxCount: 5, acceptedTypes: ["pdf", "jpg", "png", "xlsx"] },
-  { name: "Sales Invoices",                  maxCount: 5, acceptedTypes: ["pdf", "jpg", "png", "xlsx"] },
-  { name: "Sales Excel Sheet",               maxCount: 2, acceptedTypes: ["xls", "xlsx", "csv"] },
-  { name: "Cancelled Cheque",                maxCount: 1, acceptedTypes: ["pdf", "jpg", "png"] },
-  { name: "Others",                          maxCount: 5, acceptedTypes: FILE_TYPE_OPTIONS },
+// Every request accepts all file types and any number of files (the backend
+// caps a request at MAX_FILES slots); the client's uploads come back as a zip.
+const MAX_FILES = 50;
+
+const SUGGESTED: { name: string }[] = [
+  { name: "Business Bank Statements" },
+  { name: "Business Credit Card Statements" },
+  { name: "Loan Statements" },
+  { name: "Line of Credit Statement" },
+  { name: "Purchase / Expense Details" },
+  { name: "Sales Invoices" },
+  { name: "Sales Excel Sheet" },
+  { name: "Cancelled Cheque" },
+  { name: "Others" },
 ];
 
 export type RequestDraft = Partial<TaskDocRequest>;
@@ -43,8 +47,8 @@ export function toRequestDraft(r: Partial<TaskDocRequest>, idx: number): Request
     name:          r.name || "",
     placeholder:   r.placeholder || "",
     required:      r.required ?? true,
-    maxCount:      r.maxCount ?? 1,
-    acceptedTypes: r.acceptedTypes?.length ? r.acceptedTypes : ["pdf", "jpg", "jpeg", "png"],
+    maxCount:      MAX_FILES,
+    acceptedTypes: FILE_TYPE_OPTIONS,
     notes:         r.notes || "",
     done:          r.done ?? false,
     displayOrder:  r.displayOrder ?? idx + 1,
@@ -89,7 +93,7 @@ export function TaskDocRequestsConfig({
     setExpanded((e) => ({ ...e, [fields.length]: false }));
     update([...fields, {
       key: uniqueKey(slugify(s.name)), name: s.name, placeholder: `Upload ${s.name.toLowerCase()}`,
-      required: true, maxCount: s.maxCount, acceptedTypes: s.acceptedTypes, notes: "",
+      required: true, maxCount: MAX_FILES, acceptedTypes: FILE_TYPE_OPTIONS, notes: "",
       displayOrder: fields.length + 1,
     }]);
   };
@@ -97,8 +101,8 @@ export function TaskDocRequestsConfig({
   const addBlank = () => {
     setExpanded((e) => ({ ...e, [fields.length]: true }));
     update([...fields, {
-      key: "", name: "", placeholder: "", required: true, maxCount: 1,
-      acceptedTypes: ["pdf", "jpg", "jpeg", "png"], notes: "", displayOrder: fields.length + 1,
+      key: "", name: "", placeholder: "", required: true, maxCount: MAX_FILES,
+      acceptedTypes: FILE_TYPE_OPTIONS, notes: "", displayOrder: fields.length + 1,
     }]);
   };
 
@@ -167,7 +171,6 @@ export function TaskDocRequestsConfig({
                     {f.name || <span className="text-muted-foreground italic">Unnamed request</span>}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    Max {f.maxCount} file{(f.maxCount ?? 1) > 1 ? "s" : ""} ·{" "}
                     {f.required ? <span className="text-destructive">Required</span> : <span>Optional</span>}
                     {live && <> · <span className="text-foreground">{live.uploadedCount} uploaded</span></>}
                   </p>
@@ -210,87 +213,13 @@ export function TaskDocRequestsConfig({
               {expanded[idx] && (
                 <div className="mt-3 grid gap-3 border-t pt-3">
                   <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <Label className="text-xs">Field Name</Label>
-                      <Input
-                        value={f.name || ""}
-                        onChange={(e) => {
-                          const name = e.target.value;
-                          // Only auto-derive the key while it is still untouched;
-                          // renaming a request whose uploads exist must not move
-                          // them to a different key.
-                          const autoKey = !f.key || f.key === uniqueKey(slugify(f.name || ""), idx);
-                          patchField(idx, autoKey ? { name, key: uniqueKey(slugify(name), idx) } : { name });
-                        }}
-                        placeholder="e.g. Business Bank Statements …0010"
-                        className="h-8 text-sm"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs">Key (auto-generated)</Label>
-                      <Input
-                        value={f.key || ""}
-                        onChange={(e) => patchField(idx, { key: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "") })}
-                        placeholder="business_bank_statements"
-                        className="h-8 text-sm font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <Label className="text-xs">Placeholder</Label>
-                    <Input
-                      value={f.placeholder || ""}
-                      onChange={(e) => patchField(idx, { placeholder: e.target.value })}
-                      placeholder="Instructions shown to the client"
-                      className="h-8 text-sm"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <Label className="text-xs">Max Upload Count</Label>
-                      <Input
-                        type="number" min={1} max={50} value={f.maxCount ?? 1}
-                        onChange={(e) => patchField(idx, { maxCount: Math.max(1, Math.min(50, Number(e.target.value) || 1)) })}
-                        className="h-8 text-sm"
-                      />
-                    </div>
-                    <div className="flex items-center gap-2 pt-5">
+                    <div className="flex items-center gap-2 pt-1">
                       <Switch
                         checked={f.required ?? false}
                         onCheckedChange={(v) => patchField(idx, { required: v })}
                         id={`task-doc-req-${idx}`}
                       />
                       <Label htmlFor={`task-doc-req-${idx}`} className="text-xs">Required</Label>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <Label className="text-xs">Accepted File Types</Label>
-                    <div className="flex flex-wrap gap-1.5">
-                      {FILE_TYPE_OPTIONS.map((t) => {
-                        const selected = (f.acceptedTypes ?? []).includes(t);
-                        return (
-                          <button
-                            key={t} type="button"
-                            onClick={() => {
-                              const cur = f.acceptedTypes ?? [];
-                              const next = selected ? cur.filter((x) => x !== t) : [...cur, t];
-                              // Clearing every type would let nothing through;
-                              // keep the last one selected.
-                              patchField(idx, { acceptedTypes: next.length ? next : cur });
-                            }}
-                            className={`text-xs px-2 py-0.5 rounded border transition-colors ${
-                              selected
-                                ? "bg-primary text-primary-foreground border-primary"
-                                : "border-border text-muted-foreground hover:border-primary"
-                            }`}
-                          >
-                            .{t}
-                          </button>
-                        );
-                      })}
                     </div>
                   </div>
 

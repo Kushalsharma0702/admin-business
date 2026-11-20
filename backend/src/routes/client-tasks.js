@@ -267,9 +267,46 @@ router.get("/:task_id/document-buckets", async (req, res) => {
 // multi-select batch under `files`. With a batch and no explicit slotIndex,
 // each file lands in the next free slot for that category, so the client can
 // pick several documents at once instead of tapping one slot at a time.
+//
+// There is no limit on how many files a request may collect, but a single HTTP
+// request carries at most MAX_FILES_PER_REQUEST (each file sits in memory until
+// it is in S3), and at most MAX_CONCURRENT_UPLOADS requests are processed at a
+// time — the rest wait in a FIFO queue. A client with 150 files sends them in
+// batches (the server answers 413 with the batch size if one is too big).
+const MAX_FILES_PER_REQUEST = 20;
+const MAX_CONCURRENT_UPLOADS = 4;
+let activeUploads = 0;
+const uploadQueue = [];
+function acquireUploadSlot() {
+  if (activeUploads < MAX_CONCURRENT_UPLOADS) { activeUploads++; return Promise.resolve(); }
+  return new Promise((resolve) => uploadQueue.push(resolve));
+}
+function releaseUploadSlot() {
+  const next = uploadQueue.shift();
+  if (next) next(); else activeUploads--;
+}
+// Never lets a request leave without freeing its slot, however it ends.
+function uploadGate(req, res, next) {
+  acquireUploadSlot().then(() => {
+    let released = false;
+    const release = () => { if (!released) { released = true; releaseUploadSlot(); } };
+    res.on("finish", release);
+    res.on("close", release);
+    next();
+  });
+}
+
 router.post(
   "/:task_id/documents/upload",
-  upload.fields([{ name: "file", maxCount: 1 }, { name: "files", maxCount: 50 }]),
+  uploadGate,
+  (req, res, next) => upload.fields([{ name: "file", maxCount: 1 }, { name: "files", maxCount: MAX_FILES_PER_REQUEST }])(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === "LIMIT_UNEXPECTED_FILE") {
+      return res.status(413).json(fail(`Too many files in one request — send at most ${MAX_FILES_PER_REQUEST} per batch and upload the rest in further batches`));
+    }
+    if (err.code === "LIMIT_FILE_SIZE") return res.status(413).json(fail("File too large (25 MB max per file)"));
+    return next(err);
+  }),
   async (req, res) => {
     const task = await findClientTask(req.params.task_id, req.user.sub);
     if (!task) return res.status(404).json(fail("Task not found"));
@@ -306,7 +343,8 @@ router.post(
       );
       const used = new Set(taken.map((r) => r.slot_index));
       targets = [];
-      for (let s = 1; s <= baseCheck.requirement.quantity && targets.length < files.length; s++) {
+      const limit = baseCheck.requirement.quantity ?? Infinity; // null = unlimited
+      for (let s = 1; s <= limit && targets.length < files.length; s++) {
         if (!used.has(s)) targets.push(s);
       }
       if (targets.length < files.length) {

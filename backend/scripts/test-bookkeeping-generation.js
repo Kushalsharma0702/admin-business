@@ -12,7 +12,7 @@ const M = { bookkeepingFrequency: "Monthly", bookkeepingFirstDate: "2026-11-01" 
 eq("monthly: nothing before the 15th of the previous month (14 Oct)", plan(M, "2026-10-14"), []);
 eq("monthly: generated 15 Oct, period 1 Oct - 31 Oct", first(M, "2026-10-15"), { key: "BOOKKEEPING:2026-10-31", start: "2026-10-01", end: "2026-10-31", open: "2026-10-15", due: "2026-11-30" });
 eq("monthly: still that task on 14 Nov (no second task yet)", plan(M, "2026-11-14").length === 1 && first(M, "2026-11-14").end, "2026-10-31");
-eq("monthly: next generated 15 Nov, period 1 Nov - 30 Nov", first(M, "2026-11-15"), { key: "BOOKKEEPING:2026-11-30", start: "2026-11-01", end: "2026-11-30", open: "2026-11-15", due: "2026-12-30" });
+eq("monthly: next generated 15 Nov, period 1 Nov - 30 Nov", first(M, "2026-11-15"), { key: "BOOKKEEPING:2026-11-30", start: "2026-11-01", end: "2026-11-30", open: "2026-11-15", due: "2026-12-31" });
 eq("monthly: only ONE task is planned at a time (no backlog)", plan(M, "2027-03-20").length, 1);
 
 // ── Quarterly, first date 1 Nov ─────────────────────────────────────────────
@@ -28,25 +28,28 @@ eq("yearly: nothing on 14 Dec 2026", plan(Y, "2026-12-14"), []);
 eq("yearly: generated 15 Dec 2026, period 1 Jan - 31 Dec 2026", first(Y, "2026-12-15"), { key: "BOOKKEEPING:2026-12-31", start: "2026-01-01", end: "2026-12-31", open: "2026-12-15", due: "2027-03-31" });
 eq("yearly: next one 15 Dec 2027 (period = 2027)", first(Y, "2027-12-15").start + ".." + first(Y, "2027-12-15").end, "2027-01-01..2027-12-31");
 
-// ── Weekly: generated Thursday, chaser Friday, due the next Friday, period = Mon-Fri of the previous week ──
-const W = { bookkeepingFrequency: "Weekly", bookkeepingFirstDate: "2026-11-09" };   // a Monday
-// Unlike monthly/quarterly/yearly (whose lead time already puts the
-// generation date in the past the moment the client is set up), weekly's
-// anchor Thursday can itself still be ahead - the first upcoming period
-// shows right away anyway, exactly like the others, even a day before its
-// own Thursday actually arrives.
-eq("weekly: first upcoming period shows immediately, even a day before its own Thursday (Wed 11 Nov)",
-  first(W, "2026-11-11"), { key: "BOOKKEEPING:2026-11-02", start: "2026-11-02", end: "2026-11-06", open: "2026-11-12", due: "2026-11-20" });
-const w1 = first(W, "2026-11-12");                                                  // Thursday
-eq("weekly: generated THURSDAY 12 Nov", w1.open, "2026-11-12");
-eq("weekly: period = Monday-Friday of the previous week (2-6 Nov)", [w1.start, w1.end], ["2026-11-02", "2026-11-06"]);
-eq("weekly: due the following Friday (20 Nov; chaser is Fri 13 Nov)", w1.due, "2026-11-20");
-eq("weekly: weekdays check", [new Date(w1.open + "T12:00:00Z").getUTCDay(), new Date(w1.start + "T12:00:00Z").getUTCDay(), new Date(w1.end + "T12:00:00Z").getUTCDay(), new Date(w1.due + "T12:00:00Z").getUTCDay()], [4, 1, 5, 5]);
-eq("weekly: next task the following Thursday (19 Nov), period 9-13 Nov", [first(W, "2026-11-19").open, first(W, "2026-11-19").start, first(W, "2026-11-19").end], ["2026-11-19", "2026-11-09", "2026-11-13"]);
-eq("weekly: still one task on Friday 13 Nov", plan(W, "2026-11-13").length, 1);
+// ── Weekly: period = Mon-Fri of a week, opens THURSDAY of that same week, due the Friday of the NEXT week ──
+const W = { bookkeepingFrequency: "Weekly", bookkeepingFirstDate: "2026-11-16" };   // a Monday
+eq("weekly: first period shows immediately, even before its own Thursday (Mon 16 Nov)",
+  first(W, "2026-11-16"), { key: "BOOKKEEPING:2026-11-16", start: "2026-11-16", end: "2026-11-20", open: "2026-11-19", due: "2026-11-27" });
+const w1 = first(W, "2026-11-21");
+eq("weekly: period 16-20 Nov opens Thu 19 Nov, due Fri 27 Nov", [w1.start, w1.end, w1.open, w1.due], ["2026-11-16", "2026-11-20", "2026-11-19", "2026-11-27"]);
+eq("weekly: weekdays check (open Thu, start Mon, end Fri, due Fri)", [new Date(w1.open + "T12:00:00Z").getUTCDay(), new Date(w1.start + "T12:00:00Z").getUTCDay(), new Date(w1.end + "T12:00:00Z").getUTCDay(), new Date(w1.due + "T12:00:00Z").getUTCDay()], [4, 1, 5, 5]);
+eq("weekly: next task Thu 26 Nov, period 23-27 Nov, due Fri 4 Dec", [first(W, "2026-11-26").open, first(W, "2026-11-26").start, first(W, "2026-11-26").end, first(W, "2026-11-26").due], ["2026-11-26", "2026-11-23", "2026-11-27", "2026-12-04"]);
+eq("weekly: still the 16-20 task on Wed 25 Nov", first(W, "2026-11-25").start, "2026-11-16");
+eq("weekly: first date Mon 23 Nov -> first period 23-27 Nov, opens 26 Nov, due 4 Dec",
+  first({ ...W, bookkeepingFirstDate: "2026-11-23" }, "2026-11-21"), { key: "BOOKKEEPING:2026-11-23", start: "2026-11-23", end: "2026-11-27", open: "2026-11-26", due: "2026-12-04" });
+eq("weekly: only ONE task is planned at a time", plan(W, "2026-12-30").length, 1);
 
 // ── Due Date rule from the Bookkeeping tab overrides the standard deadline ──
 const MR = { ...M, bookkeepingDueRule: { type: "month", interval: 1, dayOfMonth: 15 } };
+const QR = { bookkeepingFrequency: "Quarterly", bookkeepingFirstDate: "2026-12-01", bookkeepingDueRule: { type: "month", interval: 3, dayOfMonth: "last" } };
+eq("due rule 'every 3 months, last day': quarter 1 Sep-30 Nov is due 28 Feb 2027", [first(QR, "2026-11-21").end, first(QR, "2026-11-21").due], ["2026-11-30", "2027-02-28"]);
+eq("due rule 'every 3 months, last day': next quarter 1 Dec-28 Feb is due 31 May", first(QR, "2027-02-20").due, "2027-05-31");
+eq("due rule 'every 1 month, last day': monthly Nov period is due 31 Dec", first({ ...M, bookkeepingFirstDate: "2026-12-01", bookkeepingDueRule: { type: "month", interval: 1, dayOfMonth: "last" } }, "2026-11-21").due, "2026-12-31");
+const WR = (r) => first({ ...W, bookkeepingDueRule: r }, "2026-11-21").due;
+eq("due rule 'every 1 week on Friday': period ending Fri 20 Nov is due Fri 27 Nov (not the same day)", WR({ type: "week", interval: 1, weekdays: [5] }), "2026-11-27");
+eq("due rule 'every 1 week on Monday': due Mon 23 Nov", WR({ type: "week", interval: 1, weekdays: [1] }), "2026-11-23");
 eq("due rule 'every month on the 15th': Oct period is due 15 Nov", first(MR, "2026-10-15").due, "2026-11-15");
 
 // ── Safety ─────────────────────────────────────────────────────────────────

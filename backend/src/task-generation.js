@@ -32,7 +32,7 @@ async function generateTasksForClient(clientId, config, assignedById) {
   const planned = schedule.planFilingTasks(config || {});
 
   const { rows: existing } = await db.query(
-    `SELECT id, metadata->>'periodKey' AS pk, due_date, closed_at
+    `SELECT id, task_type, metadata->>'periodKey' AS pk, due_date, open_date, closed_at
      FROM tasks WHERE client_id=$1 AND metadata->>'periodKey' IS NOT NULL`,
     [clientId]
   );
@@ -47,6 +47,11 @@ async function generateTasksForClient(clientId, config, assignedById) {
   for (const p of planned) {
     const row = have.get(p.periodKey);
     if (!row || row.closed_at) continue;
+    // A bookkeeping task's open date follows the plan too (the weekly rule moved
+    // it to Thursday of the period week) so already-generated tasks get fixed.
+    if (row.task_type === "BOOKKEEPING" && p.openDate && dateOnly(row.open_date) !== p.openDate) {
+      await db.query("UPDATE tasks SET open_date=$1, updated_at=NOW() WHERE id=$2", [p.openDate, row.id]);
+    }
     const current = dateOnly(row.due_date);
     if (current === p.dueDate) continue;
     await db.query("UPDATE tasks SET due_date=$1, updated_at=NOW() WHERE id=$2", [p.dueDate, row.id]);

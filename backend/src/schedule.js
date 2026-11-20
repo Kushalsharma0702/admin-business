@@ -270,8 +270,20 @@ function nextDueOccurrence(rule, from, anchor) {
 function bookkeepingDueDate(config, periodEnd, fallbackDue) {
   const rule = normalizeDueRule(config.bookkeepingDueRule);
   if (!rule) return fallbackDue;
+  // "Every N months on day D" is counted from the end of the period being
+  // filed: a quarter ending 30 Nov with "every 3 months, last day" is due
+  // 28 Feb. (Anchoring the month grid on the client's first date instead gave
+  // 31 Dec, 31 Mar... - months unrelated to when the data period ends.)
+  if (rule.type === "month") {
+    const idx = periodEnd.getUTCFullYear() * 12 + periodEnd.getUTCMonth() + rule.interval;
+    const dom = rule.dayOfMonth ?? periodEnd.getUTCDate();
+    return dayInMonth(Math.floor(idx / 12), (idx % 12) + 1, dom);
+  }
   const anchor = config.bookkeepingFirstDate ? parse(config.bookkeepingFirstDate) : periodEnd;
-  return nextDueOccurrence(rule, periodEnd, anchor) || fallbackDue;
+  // A weekly period ends on a Friday and a "Friday" rule must not fall due that same
+  // day (the task only opens the day before): count from the day AFTER it ends.
+  const from = rule.type === "week" ? addDays(periodEnd, 1) : periodEnd;
+  return nextDueOccurrence(rule, from, anchor) || fallbackDue;
 }
 
 // `keyDate` identifies the period and must stay stable — it is the dedup key
@@ -362,8 +374,10 @@ function legacyBookkeepingPeriods(config, today) {
 //              (1 Aug - 31 Oct). Next: generated 15 Jan, period 1 Nov - 31 Jan.
 //   Yearly     first date 1 Jan 2027: generated 15 Dec 2026; period = the year
 //              before (1 Jan - 31 Dec 2026).
-//   Weekly     generated on THURSDAY, chaser on FRIDAY, due the FOLLOWING Friday;
-//              period = Monday-Friday of the PREVIOUS week.
+//   Weekly     period = Monday-Friday of a week (first one: the first Monday on
+//              or after the first date); the task opens THURSDAY of that same
+//              week, chaser on the Friday, due the Friday of the FOLLOWING week.
+//              e.g. period 16-20 Nov: opens Thu 19 Nov, due Fri 27 Nov.
 //
 // Due date: the Due Date rule chosen on the Bookkeeping tab when there is one;
 // otherwise the standard deadline for the frequency. When the chaser emails go
@@ -376,6 +390,11 @@ const BK_STANDARD_DUE_MONTHS = { monthly: 1, quarterly: 3, yearly: 3, annual: 3 
 function fifteenthOfPreviousMonth(d) {
   const prev = addMonths(firstOfMonth(d), -1);
   return new Date(Date.UTC(prev.getUTCFullYear(), prev.getUTCMonth(), 15));
+}
+
+function mondayOnOrAfter(d) {
+  const add = (1 - d.getUTCDay() + 7) % 7;      // Monday = 1
+  return addDays(d, add);
 }
 
 function thursdayOnOrAfter(d) {
@@ -409,11 +428,11 @@ function specBookkeepingPeriods(config, today, start, freq) {
     // all under Tasks until it does. Match the others: the first upcoming
     // period always shows (i === 0), even though it "starts later"; only
     // later periods wait for their own Thursday to actually arrive.
-    for (let g = thursdayOnOrAfter(start), i = 0; (i === 0 || ymd(g) <= t) && i < 600; g = addDays(g, 7), i++) {
-      const periodStart = addDays(g, -10);          // Monday of the previous week
-      const periodEnd = addDays(g, -6);             // Friday of the previous week
-      const chaserFriday = addDays(g, 1);
-      const defaultDue = addDays(chaserFriday, 7);  // the following Friday
+    for (let m = mondayOnOrAfter(start), i = 0; (i === 0 || ymd(addDays(m, 3)) <= t) && i < 600; m = addDays(m, 7), i++) {
+      const periodStart = m;                        // Monday of the period week
+      const periodEnd = addDays(m, 4);              // Friday of the same week
+      const g = addDays(m, 3);                      // generated/opens THURSDAY of the period week
+      const defaultDue = addDays(periodEnd, 7);     // Friday of the FOLLOWING week
       out.push(bkSpecPeriod({ periodStart, periodEnd, generated: g, due: dueFor(periodEnd, defaultDue), bookkeepingDate: g, keyDate: periodStart }));
     }
   } else {
@@ -424,7 +443,12 @@ function specBookkeepingPeriods(config, today, start, freq) {
       if (ymd(generated) > t) break;
       const periodStart = addMonths(bookkeepingDate, -span);
       const periodEnd = addDays(bookkeepingDate, -1);
-      const fallback = addMonths(periodEnd, BK_STANDARD_DUE_MONTHS[freq]);
+      // A month-end period end maps to the month-end N months on (30 Nov + 1 month = 31 Dec,
+      // not 30 Dec); addMonths alone would keep the day-of-month.
+      let fallback = addMonths(periodEnd, BK_STANDARD_DUE_MONTHS[freq]);
+      if (periodEnd.getUTCDate() === lastDay(periodEnd.getUTCFullYear(), periodEnd.getUTCMonth() + 1)) {
+        fallback = monthEnd(fallback.getUTCFullYear(), fallback.getUTCMonth() + 1);
+      }
       out.push(bkSpecPeriod({ periodStart, periodEnd, generated, due: dueFor(periodEnd, fallback), bookkeepingDate, keyDate: periodEnd }));
     }
   }

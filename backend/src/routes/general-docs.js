@@ -5,7 +5,7 @@ const db      = require("../db");
 const { fail, ok } = require("../helpers");
 const { requireAuth } = require("../middleware/auth");
 const { getDownloadUrl, getObjectBuffer, putObject, buildS3Key, sendReuploadRequestEmail } = require("../config/aws");
-const { buildZip } = require("../zip");
+const { streamZip } = require("../zip");
 const env = require("../config/env");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -16,8 +16,6 @@ function validateFields(fields) {
   if (!Array.isArray(fields)) return "fields must be an array";
   for (const f of fields) {
     if (!f.key || typeof f.key !== "string") return "Each field must have a string key";
-    if (f.maxCount !== undefined && (typeof f.maxCount !== "number" || f.maxCount < 1 || f.maxCount > 50))
-      return `Field '${f.key}' maxCount must be 1-50`;
   }
   return null;
 }
@@ -28,10 +26,10 @@ function normalizeFields(fields) {
     name:          (f.name || f.key || "").trim(),
     placeholder:   (f.placeholder || "").trim(),
     required:      f.required === true,
-    maxCount:      Math.max(1, Math.min(50, Number(f.maxCount) || 1)),
-    acceptedTypes: Array.isArray(f.acceptedTypes) && f.acceptedTypes.length
-      ? f.acceptedTypes.filter((t) => ACCEPTED_TYPES.includes(t.toLowerCase()))
-      : ACCEPTED_TYPES,
+    // Policy: every field takes all file types and any number of files; any
+    // admin-sent maxCount/acceptedTypes are ignored.
+    maxCount:      null,
+    acceptedTypes: ACCEPTED_TYPES,
     notes:         (f.notes || "").trim(),
     displayOrder:  typeof f.displayOrder === "number" ? f.displayOrder : idx + 1,
   }));
@@ -107,8 +105,13 @@ function buildDocStatus(config, uploads) {
     // see what's there) but must NOT count toward completion — that's the whole
     // point of asking for a replacement.
     const allFieldUploads = uploads.filter((u) => u.field_key === f.key);
+    // Unlimited uploads, all types — also overrides limits saved before this policy.
+    const maxCount = Math.max(1, allFieldUploads.length);
+    f = { ...f, maxCount, acceptedTypes: ACCEPTED_TYPES };
     const fulfilledUploads = allFieldUploads.filter((u) => u.status === "uploaded");
-    const slots = Array.from({ length: f.maxCount }, (_, i) => {
+    // Every used slot plus one free "add another" slot.
+    const slotCount = Math.max(0, ...allFieldUploads.map((u) => u.slot_index)) + 1;
+    const slots = Array.from({ length: slotCount }, (_, i) => {
       const slotIdx = i + 1;
       const upload = allFieldUploads.find((u) => u.slot_index === slotIdx) || null;
       return {
@@ -239,22 +242,33 @@ adminRouter.get("/clients/:clientId/general-docs/archive", async (req, res) => {
   if (!files.length) return res.status(404).json(fail("This client has no uploaded documents yet"));
 
   const fieldName = (key) => ((config?.fields || []).find((f) => f.key === key)?.name || key).replace(/[\\/:*?"<>|]+/g, "_");
-  const entries = [], failed = [];
-  for (const u of files) {
-    try {
-      const data = await getObjectBuffer({ bucket: u.s3_bucket, key: u.s3_key });
-      entries.push({ name: `${fieldName(u.field_key)}_${u.slot_index}_${u.original_filename || u.file_name}`, data, date: u.uploaded_at });
-    } catch (err) { console.error(`General-docs zip: could not read ${u.s3_key}:`, err.message); failed.push(u.original_filename || u.file_name); }
+  if (files.reduce((n, u) => n + Number(u.file_size || 0), 0) > 3.8 * 1024 ** 3) {
+    return res.status(413).json(fail("The uploads total more than ~3.8 GB, which is too large for one zip — download the files individually"));
   }
-  if (!entries.length) return res.status(502).json(fail("None of this client's files could be read from storage"));
-  let zip;
-  try { zip = buildZip(entries); } catch (err) { return res.status(413).json(fail(err.message)); }
+  const skipped = [];
+  const entries = files.map((u) => ({
+    name: `${fieldName(u.field_key)}_${u.slot_index}_${u.original_filename || u.file_name}`,
+    date: u.uploaded_at,
+    read: () => getObjectBuffer({ bucket: u.s3_bucket, key: u.s3_key }),
+  }));
+  entries.push({
+    name: "_SKIPPED_FILES.txt",
+    read: async () => {
+      if (!skipped.length) throw new Error("nothing skipped");
+      return Buffer.from(`These files could not be added to this archive:\n${skipped.join("\n")}\n`);
+    },
+  });
   const safe = String(client.name || "client").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 60);
   res.setHeader("Content-Type", "application/zip");
   res.setHeader("Content-Disposition", `attachment; filename="${safe}_general_documents.zip"`);
-  res.setHeader("Content-Length", String(zip.length));
-  if (failed.length) res.setHeader("X-Skipped-Files", String(failed.length));
-  return res.end(zip);
+  try {
+    await streamZip(res, entries, {
+      onSkip: (e, err) => { if (e.name !== "_SKIPPED_FILES.txt") { skipped.push(e.name); console.error(`General-docs zip: could not add ${e.name}:`, err.message); } },
+    });
+  } catch (err) {
+    console.error("General-docs zip aborted:", err.message);
+    res.destroy();
+  }
 });
 
 // DELETE /api/admin/general-docs/uploads/:uploadId
@@ -370,12 +384,12 @@ clientRouter.post("/upload", upload.single("file"), async (req, res) => {
   if (!fieldDef) return res.status(400).json(fail(`Unknown field key: ${fieldKey}`));
 
   const slotIndex = Number(rawSlot) || 1;
-  if (slotIndex < 1 || slotIndex > fieldDef.maxCount) {
-    return res.status(400).json(fail(`slotIndex must be between 1 and ${fieldDef.maxCount} for field '${fieldDef.name}'`));
+  if (slotIndex < 1) {
+    return res.status(400).json(fail("slotIndex must be 1 or greater"));
   }
 
   const ext = req.file.originalname.split(".").pop()?.toLowerCase() || "";
-  const allowed = fieldDef.acceptedTypes || ACCEPTED_TYPES;
+  const allowed = ACCEPTED_TYPES;
   if (!allowed.includes(ext)) {
     return res.status(400).json(fail(`Invalid file type .${ext}. Allowed: ${allowed.join(", ")}`));
   }

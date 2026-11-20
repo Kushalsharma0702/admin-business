@@ -13,7 +13,7 @@ const {
   normalizeDocumentRequirements, normalizeDocumentRequests, buildDocumentRequirements, requestItemNames,
   getDocumentRequirementsFromTask,
 } = require("../document-requirements");
-const { buildZip } = require("../zip");
+const { streamZip } = require("../zip");
 const schedule = require("../schedule");
 const { generateTasksForClient } = require("../task-generation");
 
@@ -962,46 +962,45 @@ router.get("/tasks/:taskId/documents/archive", async (req, res) => {
   if (!task) return res.status(404).json(fail("Task not found"));
 
   const { rows: docs } = await db.query(
-    `SELECT category, slot_index, file_name, original_filename, s3_key, uploaded_at
+    `SELECT category, slot_index, file_name, original_filename, file_size, s3_key, uploaded_at
      FROM task_documents WHERE task_id=$1 AND s3_key IS NOT NULL ORDER BY category, slot_index`,
     [task.id]
   );
   if (!docs.length) return res.status(404).json(fail("This task has no uploaded documents yet"));
-
-  const entries = [];
-  const failed = [];
-  for (const d of docs) {
-    try {
-      const data = await getObjectBuffer({ key: d.s3_key });
-      // Prefix with the request key so a zip of several categories stays
-      // readable when the client named two files the same thing.
-      entries.push({
-        name: `${d.category}_${d.slot_index}_${d.original_filename || d.file_name}`,
-        data,
-        date: d.uploaded_at,
-      });
-    } catch (err) {
-      console.error(`Zip: could not read ${d.s3_key}:`, err.message);
-      failed.push(d.original_filename || d.file_name);
-    }
+  if (docs.reduce((n, d) => n + Number(d.file_size || 0), 0) > 3.8 * 1024 ** 3) {
+    return res.status(413).json(fail("The uploads total more than ~3.8 GB, which is too large for one zip — download the files individually"));
   }
-  if (!entries.length) return res.status(502).json(fail("None of this task's files could be read from storage"));
 
-  let zip;
-  try {
-    zip = buildZip(entries);
-  } catch (err) {
-    return res.status(413).json(fail(err.message));
-  }
+  const skipped = [];
+  const entries = docs.map((d) => ({
+    // Prefix with the request key so a zip of several categories stays
+    // readable when the client named two files the same thing.
+    name: `${d.category}_${d.slot_index}_${d.original_filename || d.file_name}`,
+    date: d.uploaded_at,
+    read: () => getObjectBuffer({ key: d.s3_key }),
+  }));
+  // Partial success must be visible: a report listing anything that couldn't be read.
+  entries.push({
+    name: "_SKIPPED_FILES.txt",
+    read: async () => {
+      if (!skipped.length) throw new Error("nothing skipped");
+      return Buffer.from(`These files could not be added to this archive:\n${skipped.join("\n")}\n`);
+    },
+  });
 
   const safeTitle = String(task.title || "task").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 60);
   res.setHeader("Content-Type", "application/zip");
   res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}_documents.zip"`);
-  res.setHeader("Content-Length", String(zip.length));
-  // Partial success has to be visible: the zip is still worth having, but the
-  // caller must be able to tell that some files didn't make it in.
-  if (failed.length) res.setHeader("X-Skipped-Files", String(failed.length));
-  return res.end(zip);
+  // Streamed one file at a time (no Content-Length): memory stays at one file
+  // however many the client uploaded.
+  try {
+    await streamZip(res, entries, {
+      onSkip: (e, err) => { if (e.name !== "_SKIPPED_FILES.txt") { skipped.push(e.name); console.error(`Zip: could not add ${e.name}:`, err.message); } },
+    });
+  } catch (err) {
+    console.error("Zip stream aborted:", err.message);
+    res.destroy();
+  }
 });
 
 // POST /api/admin/tasks/:taskId/query-sheet — set Excel rows

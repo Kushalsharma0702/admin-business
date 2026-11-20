@@ -131,4 +131,67 @@ function buildZip(entries) {
   return Buffer.concat([...chunks, centralBuf, end]);
 }
 
-module.exports = { buildZip, crc32 };
+/**
+ * Stream a ZIP to `res`, reading one file at a time so memory stays at one
+ * file (not the whole archive) however many entries there are.
+ *
+ * @param res      Express response (headers must be set by the caller before the first byte)
+ * @param entries  Array<{name, date?, read: () => Promise<Buffer>}>
+ * @returns {Promise<{written:number, skipped:string[]}>}
+ */
+async function streamZip(res, entries, { onSkip } = {}) {
+  const used = new Set();
+  const central = [];
+  const skipped = [];
+  let offset = 0;
+  let count = 0;
+
+  const write = (buf) => new Promise((resolve, reject) => {
+    if (res.write(buf)) return resolve();
+    const onDrain = () => { res.off("close", onClose); resolve(); };
+    const onClose = () => { res.off("drain", onDrain); reject(new Error("client disconnected")); };
+    res.once("drain", onDrain);
+    res.once("close", onClose);
+  });
+
+  for (const entry of entries) {
+    let data;
+    try { data = await entry.read(); }
+    catch (err) { skipped.push(entry.name); if (onSkip) onSkip(entry, err); continue; }
+    if (data.length > MAX_ZIP32 || offset + data.length + 1024 > MAX_ZIP32) {
+      skipped.push(entry.name); if (onSkip) onSkip(entry, new Error("archive size limit")); continue; // would corrupt a non-Zip64 archive
+    }
+    const name = Buffer.from(makeUniqueName(entry.name, used), "utf8");
+    const { time, day } = dosDateTime(entry.date);
+    const crc = crc32(data);
+
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(0x0800, 6);
+    local.writeUInt16LE(0, 8); local.writeUInt16LE(time, 10); local.writeUInt16LE(day, 12);
+    local.writeUInt32LE(crc, 14); local.writeUInt32LE(data.length, 18); local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(name.length, 26); local.writeUInt16LE(0, 28);
+
+    const header = Buffer.alloc(46);
+    header.writeUInt32LE(0x02014b50, 0); header.writeUInt16LE(20, 4); header.writeUInt16LE(20, 6);
+    header.writeUInt16LE(0x0800, 8); header.writeUInt16LE(0, 10); header.writeUInt16LE(time, 12);
+    header.writeUInt16LE(day, 14); header.writeUInt32LE(crc, 16); header.writeUInt32LE(data.length, 20);
+    header.writeUInt32LE(data.length, 24); header.writeUInt16LE(name.length, 28);
+    header.writeUInt32LE(offset, 42);
+
+    await write(local); await write(name); await write(data);
+    central.push(header, name);
+    offset += local.length + name.length + data.length;
+    count++;
+  }
+
+  const centralBuf = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(count, 8); end.writeUInt16LE(count, 10);
+  end.writeUInt32LE(centralBuf.length, 12); end.writeUInt32LE(offset, 16);
+  await write(centralBuf); await write(end);
+  res.end();
+  return { written: count, skipped };
+}
+
+module.exports = { buildZip, streamZip, crc32 };

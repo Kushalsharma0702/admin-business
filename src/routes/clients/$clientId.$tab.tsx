@@ -1324,37 +1324,8 @@ function Tasks({ clientId }: { clientId: string }) {
                   )}
 
                   {/* ── Documents requested from the client ──
-                      For Bookkeeping, this list is set on the client's Bookkeeping
-                      tab (applies to new tasks going forward) - shown here read-only,
-                      not editable per task. Other task types keep the full editor. */}
-                  {editing.taskType === "BOOKKEEPING" ? (
-                    <div className="rounded-md border border-border p-3 bg-muted/30 space-y-2">
-                      <p className="text-sm font-medium">Documents requested</p>
-                      <p className="text-xs text-muted-foreground">
-                        Set on this client's Bookkeeping tab, not editable per task.
-                      </p>
-                      {editDocRequests.length === 0 ? (
-                        <p className="text-xs text-muted-foreground py-1">
-                          No documents requested — the client sees no upload section for this task.
-                        </p>
-                      ) : (
-                        <ul className="space-y-1">
-                          {editDocRequests.map((f, i) => {
-                            const live = f.key ? docsData?.data.requirements.find((r) => r.key === f.key) : undefined;
-                            return (
-                              <li key={f.key ?? i} className="flex items-center justify-between text-sm border-b border-border last:border-0 pb-1 last:pb-0">
-                                <span>{f.name}</span>
-                                <span className="text-xs text-muted-foreground">
-                                  {f.required ? "Required" : "Optional"}
-                                  {live && ` · ${live.uploadedCount} uploaded`}
-                                </span>
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      )}
-                    </div>
-                  ) : (
+                      Editable per task for every task type (Bookkeeping included): the
+                      client's Bookkeeping-tab list only seeds new tasks. */}
                     <div className="rounded-md border border-border p-3 bg-muted/30">
                       <TaskDocRequestsConfig
                         value={editDocRequests}
@@ -1365,7 +1336,6 @@ function Tasks({ clientId }: { clientId: string }) {
                         downloadingAll={downloadingZip}
                       />
                     </div>
-                  )}
 
                   {/* ── Request data (first request, before any data has arrived) ──
                       Sends the document fields above to the client with a note and the
@@ -2246,7 +2216,7 @@ function GeneralDocs({ clientId }: { clientId: string }) {
                       field.status === "optional" ? "bg-slate-100 text-slate-500" :
                       "bg-amber-50 text-amber-700"
                     }`}>
-                      {field.status === "complete" ? `${field.uploadedCount}/${field.maxCount} uploaded` :
+                      {field.status === "complete" ? `${field.uploadedCount} uploaded` :
                        field.status === "optional" ? "Optional" :
                        `${field.pendingCount} pending`}
                     </span>

@@ -15,7 +15,10 @@ export const fmtDate = (s?: string) => {
   if (!s) return "—";
   const d = new Date(s);
   if (isNaN(d.getTime())) return s;
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  // A calendar date ("2026-11-16", or midnight UTC) must not shift to the
+  // previous day in timezones west of UTC (the Atlantic-time admins saw 15 Nov).
+  const calendarDate = /^\d{4}-\d{2}-\d{2}(T00:00:00(\.000)?Z)?$/.test(s);
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", ...(calendarDate ? { timeZone: "UTC" } : {}) });
 };
 
 export const downloadCSV = (filename: string, rows: readonly Record<string, unknown>[] | readonly object[]) => {
