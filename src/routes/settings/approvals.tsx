@@ -11,7 +11,7 @@ export const Route = createFileRoute("/settings/approvals")({ component: Approva
 function ApprovalsPage() {
   const [enabled, setEnabled] = useState(false);
   const [threshold, setThreshold] = useState("500");
-  const [approver, setApprover] = useState("Angela Martin");
+  const [approver, setApprover] = useState("");
 
   return (
     <div className="max-w-2xl">
@@ -30,7 +30,7 @@ function ApprovalsPage() {
             <div>
               <label className="text-xs font-medium text-muted-foreground uppercase mb-1 block">Approver</label>
               <select className="w-full border border-border rounded-md h-9 px-2 text-sm bg-background" value={approver} onChange={e => setApprover(e.target.value)}>
-                <option>Angela Martin</option><option>Oscar Martinez</option><option>Kevin Malone</option>
+                <option value="">Select approver</option>
               </select>
             </div>
           </>

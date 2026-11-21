@@ -90,10 +90,10 @@ export const useAppStore = create<AppState>()(persist((set) => ({
   notes: seed.seedNotes,
   receipts: [],
 
-  extractionSettings: { emailPrefix: "angela-martin", showInboxTabs: true, duplicateMode: "Automatic", extractTax: true, defaultTaxRate: 13 },
-  automationSettings: { autoCategorisation: "Always", defaultCategory: "Office Expenses", smartSuggestions: true, autoApply: false, groupUncategorised: false },
+  extractionSettings: { emailPrefix: "", showInboxTabs: true, duplicateMode: "Automatic", extractTax: true, defaultTaxRate: 13 },
+  automationSettings: { autoCategorisation: "Always", defaultCategory: "", smartSuggestions: true, autoApply: false, groupUncategorised: false },
   exportSettings: { csvFormat: "Standard", decimalSeparator: "Dot", dateFormat: "DD-Mon-YYYY", showItemHeader: true, columns: { "Receipt ID": true, "Description": true, "Net amount": true, "Tax amount": true, "Total amount": true, "Supplier": false, "Date": false, "Category": false, "Payment method": false } },
-  businessProfile: { name: "Martin & Co. Tax Advisors", crn: "1234567", country: "Canada", currency: "CAD", language: "English", industry: "Accounting", selfEmployed: false, yearEndMonth: "December", yearEndDay: "31", taxNumber: "TX-998877", reportingCycle: "Quarterly" },
+  businessProfile: { name: "", crn: "", country: "Canada", currency: "CAD", language: "English", industry: "Accounting", selfEmployed: false, yearEndMonth: "December", yearEndDay: "31", taxNumber: "", reportingCycle: "Quarterly" },
 
   addTask: (t) => set((s) => ({ tasks: [t, ...s.tasks] })),
   updateTask: (id, patch) => set((s) => ({ tasks: s.tasks.map((x) => (x.id === id ? { ...x, ...patch } : x)) })),
@@ -124,6 +124,9 @@ export const useAppStore = create<AppState>()(persist((set) => ({
   updateReceipt: (id, patch) => set((s) => ({ receipts: s.receipts.map((x) => (x.id === id ? { ...x, ...patch } : x)) })),
 }), {
   name: "taxease-admin-store",
+  // v1: drop the demo cost items the old seed persisted into browsers' localStorage.
+  version: 1,
+  migrate: (persisted: unknown) => ({ ...(persisted as { files: FileItem[]; receipts: Receipt[] }), costs: [] as CostItem[] }),
   partialize: (s) => ({
     costs: s.costs,
     files: s.files,

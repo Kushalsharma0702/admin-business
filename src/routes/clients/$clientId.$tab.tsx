@@ -110,7 +110,7 @@ function Communication({ clientId }: { clientId: string }) {
   const [text, setText] = useState("");
   const send = () => {
     if (!text.trim()) return;
-    addMessage({ id: uid(), clientId, from: "Angela Martin", to: "Client", channel: "Portal", body: text, sentAt: new Date().toLocaleString() });
+    addMessage({ id: uid(), clientId, from: "Staff", to: "Client", channel: "Portal", body: text, sentAt: new Date().toLocaleString() });
     setText(""); toast.success("Message sent");
   };
   return (
@@ -118,7 +118,7 @@ function Communication({ clientId }: { clientId: string }) {
       <div className="flex gap-2 text-xs mb-4">{["All","Email","SMS","Portal messages"].map((f) => <button key={f} className="px-2 py-1 rounded bg-muted">{f}</button>)}</div>
       <div className="space-y-3 mb-4 max-h-96 overflow-y-auto">
         {msgs.map((m) => (
-          <div key={m.id} className={`p-3 rounded-lg ${m.from === "Angela Martin" ? "bg-primary/10 ml-12" : "bg-muted mr-12"}`}>
+          <div key={m.id} className={`p-3 rounded-lg ${m.from === "Staff" ? "bg-primary/10 ml-12" : "bg-muted mr-12"}`}>
             <div className="text-xs text-muted-foreground mb-1">{m.from} • {m.channel} • {m.sentAt}</div>
             <div className="text-sm">{m.body}</div>
           </div>
@@ -291,7 +291,7 @@ function Files({ clientId }: { clientId: string }) {
   const files = useMemo(() => allFiles.filter((f) => f.clientId === clientId), [allFiles, clientId]);
   const onUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const list = e.target.files; if (!list) return;
-    Array.from(list).forEach((f) => addFile({ id: uid(), clientId, name: f.name, type: f.type || "file", size: f.size, uploadedAt: new Date().toLocaleString(), uploadedBy: "Angela Martin" }));
+    Array.from(list).forEach((f) => addFile({ id: uid(), clientId, name: f.name, type: f.type || "file", size: f.size, uploadedAt: new Date().toLocaleString(), uploadedBy: "Staff" }));
     toast.success(`${list.length} file(s) uploaded`);
   };
   return (

@@ -55,7 +55,7 @@ export function TopBar() {
           <div className="flex items-center gap-2 pl-2 border-l border-border">
             <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground font-semibold text-xs flex items-center justify-center">{initials}</div>
             <div className="text-sm hidden md:block">
-              <div className="font-medium text-foreground leading-tight">{user?.name ?? "Angela Martin"}</div>
+              <div className="font-medium text-foreground leading-tight">{user?.name ?? "Admin"}</div>
               <div className="text-muted-foreground text-xs leading-tight">Tax Advisor</div>
             </div>
             <button onClick={logout} title="Sign out" className="ml-1 w-8 h-8 rounded-md hover:bg-muted flex items-center justify-center text-muted-foreground hover:text-foreground">

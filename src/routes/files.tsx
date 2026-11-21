@@ -14,7 +14,7 @@ function FilesPage() {
 
   const onUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const list = e.target.files; if (!list) return;
-    Array.from(list).forEach(f => addFile({ id: uid(), clientId: clients[0]?.id ?? "", name: f.name, type: f.type || "file", size: f.size, uploadedAt: new Date().toLocaleString(), uploadedBy: "Angela Martin" }));
+    Array.from(list).forEach(f => addFile({ id: uid(), clientId: clients[0]?.id ?? "", name: f.name, type: f.type || "file", size: f.size, uploadedAt: new Date().toLocaleString(), uploadedBy: "Staff" }));
     toast.success(`${list.length} file(s) uploaded`);
   };
 

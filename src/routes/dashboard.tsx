@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { AppShell } from "@/components/app/AppShell";
 import { useAppStore } from "@/store/useAppStore";
+import { useAuthStore } from "@/store/useAuthStore";
 import { Card } from "@/components/ui/card";
 import { Users, CheckSquare, FileSearch, DollarSign, Receipt, Link2, UserPlus, CheckCircle2 } from "lucide-react";
 import { ClientAvatar } from "@/components/app/ClientAvatar";
@@ -15,6 +16,7 @@ export const Route = createFileRoute("/dashboard")({ component: DashboardPage })
 
 function DashboardPage() {
   const navigate = useNavigate();
+  const firstName = useAuthStore((s) => s.user?.name)?.split(" ")[0] ?? "";
   const { clients, tasks, costs, sales, transactions, billing, activity, completeTask } = useAppStore();
   const [chartTab, setChartTab] = useState<"Costs" | "Sales" | "Bank">("Costs");
 
@@ -52,7 +54,7 @@ function DashboardPage() {
   return (
     <AppShell>
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Welcome back, Angela 👋</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Welcome back{firstName ? `, ${firstName}` : ""} 👋</h1>
         <p className="text-sm text-muted-foreground mt-1">Here's what's happening across your practice today.</p>
       </div>
 

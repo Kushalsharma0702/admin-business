@@ -3,7 +3,7 @@ import { Home, Bell, Users, Folder, CheckSquare, Clock, CreditCard, Layout, BarC
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/store/useAuthStore";
 
-const canopyItems = [
+const mainItems = [
   { to: "/dashboard", label: "Dashboard", icon: Home },
   { to: "/inbox", label: "Inbox", icon: Bell },
   { to: "/clients", label: "Clients", icon: Users },
@@ -15,7 +15,7 @@ const canopyItems = [
   { to: "/insights", label: "Insights", icon: BarChart2 },
 ];
 
-const dextItems = [
+const financialItems = [
   { to: "/costs", label: "Costs", icon: Receipt },
   { to: "/ocr", label: "Costs inbox", icon: Receipt },
   { to: "/sales", label: "Sales", icon: Receipt },
@@ -52,14 +52,14 @@ export function Sidebar() {
   return (
     <aside className="group/sb fixed left-0 top-0 bottom-0 w-[60px] hover:w-[220px] bg-sidebar-bg z-30 transition-all duration-200 flex flex-col overflow-hidden shadow-xl">
       <div className="h-14 flex items-center gap-2 px-4 border-b border-white/5">
-        <div className="w-7 h-7 rounded bg-primary flex items-center justify-center text-white font-bold text-sm shrink-0">C</div>
-        <span className="text-white font-semibold text-sm whitespace-nowrap opacity-0 group-hover/sb:opacity-100 transition-opacity">Canopy + Dext</span>
+        <div className="w-7 h-7 rounded bg-primary flex items-center justify-center text-white font-bold text-sm shrink-0">D</div>
+        <span className="text-white font-semibold text-sm whitespace-nowrap opacity-0 group-hover/sb:opacity-100 transition-opacity">Diamond Accounts</span>
       </div>
       <nav className="flex-1 py-3 space-y-0.5 overflow-y-auto">
-        {canopyItems.map(Item)}
+        {mainItems.map(Item)}
         <div className="my-3 mx-4 border-t border-white/5" />
         <div className="px-5 mb-1 text-[10px] font-semibold uppercase tracking-wider text-sidebar-fg/60 opacity-0 group-hover/sb:opacity-100 transition-opacity">Financial</div>
-        {dextItems.map(Item)}
+        {financialItems.map(Item)}
       </nav>
       <div className="border-t border-white/5 py-2">
         {isSuperAdmin && Item({ to: "/admins", label: "Admins", icon: ShieldCheck })}

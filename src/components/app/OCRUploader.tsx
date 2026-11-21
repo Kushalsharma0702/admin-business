@@ -233,7 +233,7 @@ export function OCRUploader() {
       status,
       rawText,
       uploadedAt: new Date().toLocaleString(),
-      uploadedBy: "Angela Martin",
+      uploadedBy: "Staff",
     };
 
     addReceipt(receipt);
@@ -253,7 +253,7 @@ export function OCRUploader() {
           : status === "Ready"
             ? "Ready"
             : "Processing",
-      owner: "Angela Martin",
+      owner: "Staff",
     });
 
     setSavedReceiptId(receiptId);
