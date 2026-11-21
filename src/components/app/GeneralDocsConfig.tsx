@@ -187,6 +187,41 @@ export function GeneralDocsConfig({ value, onChange, compact }: Props) {
                 {expanded[idx] && (
                   <div className="mt-3 grid gap-3 border-t pt-3">
                     <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Field Name</Label>
+                        <Input
+                          value={f.name || ""}
+                          onChange={(e) => {
+                            const name = e.target.value;
+                            const key = name.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+                            patchField(idx, { name, key: f.key || key });
+                          }}
+                          placeholder="e.g. Bank Statements"
+                          className="h-8 text-sm"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Key (auto-generated)</Label>
+                        <Input
+                          value={f.key || ""}
+                          onChange={(e) => patchField(idx, { key: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "") })}
+                          placeholder="bank_statements"
+                          className="h-8 text-sm font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-xs">Placeholder</Label>
+                      <Input
+                        value={f.placeholder || ""}
+                        onChange={(e) => patchField(idx, { placeholder: e.target.value })}
+                        placeholder="Instructions shown to client"
+                        className="h-8 text-sm"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
                       <div className="flex items-center gap-2 pt-1">
                         <Switch
                           checked={f.required ?? false}
