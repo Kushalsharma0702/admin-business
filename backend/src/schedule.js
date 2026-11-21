@@ -374,17 +374,17 @@ function legacyBookkeepingPeriods(config, today) {
 //              (1 Aug - 31 Oct). Next: generated 15 Jan, period 1 Nov - 31 Jan.
 //   Yearly     first date 1 Jan 2027: generated 15 Dec 2026; period = the year
 //              before (1 Jan - 31 Dec 2026).
-//   Weekly     period = Monday-Friday of a week (first one: the first Monday on
-//              or after the first date); the task opens THURSDAY of that same
-//              week, chaser on the Friday, due the Friday of the FOLLOWING week.
-//              e.g. period 16-20 Nov: opens Thu 19 Nov, due Fri 27 Nov.
+//   Weekly     the data requested is the PREVIOUS week's: period = previous
+//              Monday-Friday, opens the previous Thursday, chaser that Friday, due the
+//              Friday of the first-date week. First date Mon 16 Nov: period 9-13 Nov,
+//              opens Thu 12 Nov, due Fri 20 Nov (next: 16-20 Nov, opens 19, due 27).
 //
 // Due date: the Due Date rule chosen on the Bookkeeping tab when there is one;
 // otherwise the standard deadline for the frequency. When the chaser emails go
 // out is decided by the chaser scheduler / the tab's Chaser Email Schedule, not
 // here. The task's open_date IS its generation date.
 const BK_SPAN_MONTHS = { monthly: 1, quarterly: 3, yearly: 12, annual: 12 };
-const BK_STANDARD_DUE_MONTHS = { monthly: 1, quarterly: 3, yearly: 3, annual: 3 };
+const BK_STANDARD_DUE_MONTHS = { monthly: 1, quarterly: 1, yearly: 3, annual: 3 };
 
 // The 15th of the month before `d`'s month.
 function fifteenthOfPreviousMonth(d) {
@@ -428,12 +428,16 @@ function specBookkeepingPeriods(config, today, start, freq) {
     // all under Tasks until it does. Match the others: the first upcoming
     // period always shows (i === 0), even though it "starts later"; only
     // later periods wait for their own Thursday to actually arrive.
-    for (let m = mondayOnOrAfter(start), i = 0; (i === 0 || ymd(addDays(m, 3)) <= t) && i < 600; m = addDays(m, 7), i++) {
-      const periodStart = m;                        // Monday of the period week
-      const periodEnd = addDays(m, 4);              // Friday of the same week
-      const g = addDays(m, 3);                      // generated/opens THURSDAY of the period week
-      const defaultDue = addDays(periodEnd, 7);     // Friday of the FOLLOWING week
-      out.push(bkSpecPeriod({ periodStart, periodEnd, generated: g, due: dueFor(periodEnd, defaultDue), bookkeepingDate: g, keyDate: periodStart }));
+    // `m` is the Monday of the week being started (the first one: the first Monday on or
+    // after the client's first date). The data requested is the PREVIOUS week's, so:
+    //   period = previous Mon-Fri, opens the previous Thursday, due the Friday of week `m`.
+    // First date Mon 16 Nov -> period 9-13 Nov, opens Thu 12 Nov, due Fri 20 Nov.
+    for (let m = mondayOnOrAfter(start), i = 0; (i === 0 || ymd(addDays(m, -4)) <= t) && i < 600; m = addDays(m, 7), i++) {
+      const periodStart = addDays(m, -7);           // Monday of the previous week
+      const periodEnd = addDays(m, -3);             // Friday of the previous week
+      const g = addDays(m, -4);                     // generated/opens THURSDAY before
+      const defaultDue = addDays(m, 4);             // Friday of the week `m`
+      out.push(bkSpecPeriod({ periodStart, periodEnd, generated: g, due: dueFor(periodEnd, defaultDue), bookkeepingDate: m, keyDate: periodStart }));
     }
   } else {
     const span = BK_SPAN_MONTHS[freq];
