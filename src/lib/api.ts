@@ -8,13 +8,16 @@ export const API_BASE =
       ? window.location.origin
       : "http://127.0.0.1:3001");
 
+// Dropdown order. "Work in Progress" is not offered: the client sees it automatically
+// (the backend still accepts it for tasks already set to it).
 export const ADMIN_STATUSES = [
   "On Hold",
   "Not to Do",
   "Data not received",
   "Partial Data received",
   "Data Missing Closed",
-  "Work in Progress",
+  "Send for automation",
+  "Received from automation",
   "Query sent to Support team",
   "Query sent to client",
   "Partial Query received",
@@ -22,8 +25,6 @@ export const ADMIN_STATUSES = [
   "Sent for Approval to support team",
   "Sent for Approval to client",
   "Approval received",
-  "Send for automation",
-  "Received from automation",
   "Filed",
 ] as const;
 
@@ -766,8 +767,6 @@ export type TaskDocRequest = {
   maxCount: number;
   acceptedTypes: string[];
   notes: string;
-  /** Admin "Mark as done" — undone requests become the missing-data list. */
-  done?: boolean;
   displayOrder: number;
 };
 

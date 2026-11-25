@@ -50,7 +50,6 @@ export function toRequestDraft(r: Partial<TaskDocRequest>, idx: number): Request
     maxCount:      MAX_FILES,
     acceptedTypes: FILE_TYPE_OPTIONS,
     notes:         r.notes || "",
-    done:          r.done ?? false,
     displayOrder:  r.displayOrder ?? idx + 1,
   };
 }
@@ -176,12 +175,6 @@ export function TaskDocRequestsConfig({
                   </p>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  <Button
-                    type="button" size="sm" variant={f.done ? "secondary" : "outline"} className="h-7 text-xs"
-                    onClick={() => patchField(idx, { done: !f.done })}
-                  >
-                    {f.done ? "Done ✓" : "Mark as done"}
-                  </Button>
                   <Button type="button" size="icon" variant="ghost" className="h-7 w-7"
                     onClick={() => setExpanded((e) => ({ ...e, [idx]: !e[idx] }))}>
                     {expanded[idx] ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}

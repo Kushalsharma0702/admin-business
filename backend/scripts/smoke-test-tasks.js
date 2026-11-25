@@ -109,18 +109,18 @@ async function main() {
   const bad = await http("PATCH", `${BASE}/admin/tasks/${taskId}`, A, { adminStatus: "Not A Status" });
   check("invalid status rejected (400)", bad.status === 400, `HTTP ${bad.status}`);
 
-  // ── 6. Per-document done -> missing-data defaults to the NOT-done items ─────
+  // ── 6. Legacy per-document done flag is ignored ─────────────────────────────
   const marked = await http("PATCH", `${BASE}/admin/tasks/${taskId}`, A, {
     documentRequests: [{ ...reqs[0], done: true }, { ...reqs[1], done: false }],
   });
   const savedReqs = marked.json?.data?.metadata?.documentRequests || [];
-  check("done flag persisted per request", savedReqs[0]?.done === true && savedReqs[1]?.done === false, JSON.stringify(savedReqs.map((r) => r.done)));
+  check("legacy done flag is not stored", savedReqs.length === 2 && savedReqs.every((r) => r.done === undefined), JSON.stringify(savedReqs.map((r) => r.done)));
 
   const missing = await http("POST", `${BASE}/admin/tasks/${taskId}/missing-data-request`, A,
     { period: "Oct 1 to 15", note: "Bank - 0547 - Oct 1 to 15 data missing" });
   const mdr = missing.json?.data?.missingDataRequest;
-  check("missing-data request defaults to not-done items only",
-    JSON.stringify(mdr?.outstandingKeys) === JSON.stringify([reqs[1].key]), JSON.stringify(mdr?.outstandingKeys));
+  check("missing-data request defaults to every requested item",
+    JSON.stringify(mdr?.outstandingKeys) === JSON.stringify([reqs[0].key, reqs[1].key]), JSON.stringify(mdr?.outstandingKeys));
   check("status moved to Partial Data received", missing.json?.data?.adminStatus === "Partial Data received", missing.json?.data?.adminStatus);
   check("no email sent (sendEmail not set)", missing.json?.data?.emailed === false);
 

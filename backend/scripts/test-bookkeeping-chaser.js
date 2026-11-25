@@ -47,7 +47,7 @@ const tick = async (iso) => { const n = sent.length; await runChaserSweep(new Da
       eq("reminder #1 is sent", await tick("2026-11-04T14:00:00Z"), 1);
       const a = sent[sent.length - 1];
       eq("...it repeats the admin's note and period", [a.missingDataNote, a.missingDataPeriod, a.isMissingData], ["Upload your October data", "Oct 1 - Oct 31", false]);
-      eq("...and lists only the fields not yet done", a.missingItems, ["Bank 0547", "Visa 1234"]);
+      eq("...and lists every requested field (legacy done flag ignored)", a.missingItems, ["Bank 0010", "Bank 0547", "Visa 1234"]);
       // ... and once partial data arrived it switches to the missing-data wording with the admin's edited names
       await db.query("UPDATE tasks SET last_reminder_sent_at=NULL, admin_status='Partial Data received', metadata = metadata || $2::jsonb WHERE id=$1",
         [rt.id, JSON.stringify({ missingDataRequest: { note: "Some are missing", period: "Oct 1 to 15", outstandingKeys: ["bank_0547"], items: [{ key: "bank_0547", name: "Bank - 0547 - Oct 1 to 15 Data missing" }] } })]);

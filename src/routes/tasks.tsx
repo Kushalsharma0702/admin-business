@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { useState, type ReactNode } from "react";
 import { tasksApi, assignableAdminsApi, ADMIN_STATUSES, type ApiTask } from "@/lib/api";
 import { Loader2, WifiOff } from "lucide-react";
-import { fmtDate } from "@/components/app/utils";
+import { fmtDate, taskFrequency } from "@/components/app/utils";
 
 export const Route = createFileRoute("/tasks")({ component: TasksPage });
 
@@ -60,18 +60,6 @@ function FilterTag({ label, onClear }: { label: string; onClear: () => void }) {
       <button onClick={onClear} aria-label={`Clear ${label} filter`} className="rounded-full hover:bg-primary/20 w-4 h-4 inline-flex items-center justify-center">×</button>
     </span>
   );
-}
-
-// Which config key holds "how often" depends on the task type - Corporate Tax
-// (filing + its installments) doesn't have one, it's just tied to fiscal year end.
-function taskFrequency(t: ApiTask): string {
-  const c = t.config as Record<string, unknown> | undefined;
-  const key = t.taskType === "BOOKKEEPING" ? "bookkeepingFrequency"
-    : t.taskType === "HST" || t.taskType === "HST_QUARTERLY_PAYMENT" ? "salesTaxFrequency"
-    : t.taskType === "PAYROLL" ? "payrollFrequency"
-    : null;
-  const v = key ? c?.[key] : undefined;
-  return typeof v === "string" && v ? v : "—";
 }
 
 function TasksPage() {

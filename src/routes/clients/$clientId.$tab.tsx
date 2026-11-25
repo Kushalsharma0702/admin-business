@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/app/EmptyState";
-import { fmtDate, fmtMoney } from "@/components/app/utils";
+import { fmtDate, fmtMoney, taskFrequency } from "@/components/app/utils";
 import { Upload, FileText, StickyNote, FileQuestion, FilePlus, Clock, Send, Plus, Loader2, WifiOff, Copy, Check, ImagePlus, ImageIcon, X, Paperclip, Download, Trash2, MessageSquare, History, CheckCircle2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -394,6 +394,12 @@ function ConfigFieldInput({
   );
 }
 
+const isOfferedStatus = (s: string) => (ADMIN_STATUSES as readonly string[]).includes(s);
+// A task can sit on a status the dropdown doesn't offer (e.g. a generated task's
+// "Request Tax return information"). List it too, or the select shows "On Hold".
+const statusOptions = (current: string): string[] =>
+  isOfferedStatus(current) ? [...ADMIN_STATUSES] : [current, ...ADMIN_STATUSES];
+
 function Tasks({ clientId }: { clientId: string }) {
   const queryClient = useQueryClient();
   const HST_QUARTERLY_SUBTASK = "Email client for quarterly tax payment";
@@ -433,20 +439,19 @@ function Tasks({ clientId }: { clientId: string }) {
   // The first "Request Data" (before any data has arrived): period + note to the client.
   const [requestData, setRequestData] = useState<{ period: string; note: string }>({ period: "", note: "" });
   const [requestBusy, setRequestBusy] = useState(false);
-  // The outstanding list follows the per-request "Mark as done" toggles until
+  // The outstanding list follows the task's document requests (all ticked) until
   // the admin ticks/unticks it by hand or a missing-data request was already
-  // saved for this task. Without this the default was fixed at the moment the
-  // dialog opened, so marking a request done afterwards left it ticked as missing.
+  // saved for this task.
   const [outstandingTouched, setOutstandingTouched] = useState(false);
   const [hadSavedMissingRequest, setHadSavedMissingRequest] = useState(false);
-  const notDoneKeys = editDocRequests.filter((r) => r.key && !r.done).map((r) => r.key as string).join("|");
+  const requestKeys = editDocRequests.filter((r) => r.key).map((r) => r.key as string).join("|");
   useEffect(() => {
     if (outstandingTouched || hadSavedMissingRequest) return;
     setMissing((m) => {
-      const next = notDoneKeys ? notDoneKeys.split("|") : [];
+      const next = requestKeys ? requestKeys.split("|") : [];
       return JSON.stringify(m.outstandingKeys) === JSON.stringify(next) ? m : { ...m, outstandingKeys: next };
     });
-  }, [notDoneKeys, outstandingTouched, hadSavedMissingRequest]);
+  }, [requestKeys, outstandingTouched, hadSavedMissingRequest]);
   useEffect(() => {
     if (editForm.adminStatus === "Partial Data received") {
       setMissing((m) => (m.note.trim() ? m : { ...m, note: DEFAULT_MISSING_NOTE }));
@@ -667,10 +672,10 @@ function Tasks({ clientId }: { clientId: string }) {
     setMissing({
       period: mdr?.period ?? "",
       note: mdr?.note ?? "",
-      // No saved request yet: carry every request not marked done into the
-      // missing-data section by default.
+      // No saved request yet: carry every request into the missing-data
+      // section by default.
       outstandingKeys: mdr?.outstandingKeys ??
-        requests.filter((r) => r.key && !r.done).map((r) => r.key as string),
+        requests.filter((r) => r.key).map((r) => r.key as string),
     });
     setDetailTab("comments");
     setNewComment("");
@@ -699,7 +704,8 @@ function Tasks({ clientId }: { clientId: string }) {
     try {
       await tasksApi.update(editing.id, {
         title: editForm.title.trim(),
-        adminStatus: editForm.adminStatus,
+        // The server rejects a status it doesn't know, so leave an unlisted one untouched.
+        ...(isOfferedStatus(editForm.adminStatus) ? { adminStatus: editForm.adminStatus } : {}),
         // null, not undefined — an omitted key would leave a cleared description in place.
         description: editForm.description.trim() || null,
         openDate: editForm.openDate || null,
@@ -927,16 +933,19 @@ function Tasks({ clientId }: { clientId: string }) {
         {active.length === 0 ? (
           <div className="px-4 py-6 text-sm text-muted-foreground text-center">No active tasks</div>
         ) : (
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="text-xs uppercase text-muted-foreground bg-muted/40">
               <tr>
                 <th className="text-left px-4 py-2">Task</th>
-                <th className="text-left px-4 py-2">Type</th>
-                <th className="text-left px-4 py-2">Assignee</th>
-                <th className="text-left px-4 py-2">Client Status</th>
-                <th className="text-left px-4 py-2">Admin Status</th>
-                <th className="text-left px-4 py-2">Due</th>
-                <th className="px-4 py-2" />
+                <th className="text-left px-2 py-2">Type</th>
+                <th className="text-left px-2 py-2">Frequency</th>
+                <th className="text-left px-2 py-2">Assignee</th>
+                <th className="text-left px-2 py-2">Client Status</th>
+                <th className="text-left px-2 py-2">Admin Status</th>
+                <th className="text-left px-2 py-2">Period End</th>
+                <th className="text-left px-2 py-2">Due</th>
+                <th className="px-2 py-2" />
               </tr>
             </thead>
             <tbody>
@@ -944,29 +953,31 @@ function Tasks({ clientId }: { clientId: string }) {
                 <tr key={t.id} onClick={() => startEdit(t)}
                   className="border-b border-border last:border-0 hover:bg-muted/40 cursor-pointer">
                   <td className="px-4 py-2.5 font-medium">{t.title}</td>
-                  <td className="px-4 py-2.5 text-muted-foreground text-xs">{t.taskType ?? "—"}</td>
-                  <td className="px-4 py-2.5 text-xs">
+                  <td className="px-2 py-2.5 text-muted-foreground text-xs">{t.taskType ?? "—"}</td>
+                  <td className="px-2 py-2.5 text-muted-foreground text-xs">{taskFrequency(t)}</td>
+                  <td className="px-2 py-2.5 text-xs">
                     {t.assignedToName ?? <span className="text-muted-foreground">Unassigned</span>}
                   </td>
-                  <td className="px-4 py-2.5">
+                  <td className="px-2 py-2.5">
                     {t.status === "complete"
                       ? <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-medium">Submitted</span>
                       : <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-medium">Pending</span>}
                   </td>
-                  <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+                  <td className="px-2 py-2.5" onClick={(e) => e.stopPropagation()}>
                     <select
                       value={t.adminStatus}
                       disabled={updatingId === t.id}
                       onChange={(e) => handleStatusChange(t.id, e.target.value as AdminStatus)}
-                      className="text-xs border border-border rounded px-1.5 py-1 bg-background min-w-[160px] disabled:opacity-50"
+                      className="text-xs border border-border rounded px-1.5 py-1 bg-background w-[150px] disabled:opacity-50"
                     >
-                      {ADMIN_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                      {statusOptions(t.adminStatus).map((s) => <option key={s} value={s}>{s}</option>)}
                     </select>
                     {updatingId === t.id && <Loader2 className="inline w-3 h-3 animate-spin ml-1 text-muted-foreground" />}
                   </td>
-                  <td className="px-4 py-2.5 text-muted-foreground text-xs">{t.dueDate ? fmtDate(t.dueDate) : "—"}</td>
-                  <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-center justify-end gap-3">
+                  <td className="px-2 py-2.5 text-muted-foreground text-xs whitespace-nowrap">{t.periodEnd ? fmtDate(t.periodEnd) : "—"}</td>
+                  <td className="px-2 py-2.5 text-muted-foreground text-xs whitespace-nowrap">{t.dueDate ? fmtDate(t.dueDate) : "—"}</td>
+                  <td className="px-2 py-2.5" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex flex-col items-end gap-1 whitespace-nowrap">
                       <button onClick={() => startEdit(t)} className="text-xs text-primary hover:underline">Edit</button>
                       <button onClick={() => setClosingTask(t)} className="text-xs text-emerald-600 hover:underline inline-flex items-center gap-1">
                         <CheckCircle2 className="w-3.5 h-3.5" />Mark as done
@@ -978,6 +989,7 @@ function Tasks({ clientId }: { clientId: string }) {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </Card>
 
@@ -1261,7 +1273,7 @@ function Tasks({ clientId }: { clientId: string }) {
                     <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Status of the task</label>
                     <select className="mt-1 w-full border border-border rounded-md h-9 px-2 text-sm bg-background"
                       value={editForm.adminStatus} onChange={(e) => setEditForm({ ...editForm, adminStatus: e.target.value as AdminStatus })}>
-                      {ADMIN_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                      {statusOptions(editing.adminStatus).map((s) => <option key={s} value={s}>{s}</option>)}
                     </select>
                     {editing.closedAt && (
                       <p className="text-[11px] text-muted-foreground mt-1">
@@ -1345,7 +1357,7 @@ function Tasks({ clientId }: { clientId: string }) {
                       <div>
                         <p className="text-sm font-medium">Request data from the client</p>
                         <p className="text-xs text-muted-foreground">
-                          Emails the client the document fields listed above that are not marked done. Uses the requests saved
+                          Emails the client the document fields listed above. Uses the requests saved
                           on this task — press Save changes first if you have just edited them.
                           {!editDocRequests.some((r) => r.key) && " (Add and save at least one document request above to enable this.)"}
                         </p>

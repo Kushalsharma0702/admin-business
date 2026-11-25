@@ -164,7 +164,7 @@ function ClientLayout() {
             </div>
           </div>
         )}
-        <div><Outlet /></div>
+        <div className="min-w-0"><Outlet /></div>
       </div>
     </AppShell>
   );

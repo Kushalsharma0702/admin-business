@@ -258,8 +258,8 @@ async function main() {
     JSON.stringify({ d: after.description, due: after.dueDate, open: after.openDate, as: after.assignedTo }));
   check("Admin One's status survived Admin Two's concurrent edits (Partial Data received)",
     after.adminStatus === "Partial Data received", after.adminStatus);
-  check("missing-data request targets only the not-done document",
-    JSON.stringify(out.a1Missing.json?.data?.missingDataRequest?.outstandingKeys) === JSON.stringify([reqs[1].key]),
+  check("missing-data request targets every requested document",
+    JSON.stringify(out.a1Missing.json?.data?.missingDataRequest?.outstandingKeys) === JSON.stringify([reqs[0].key, reqs[1].key]),
     JSON.stringify(out.a1Missing.json?.data?.missingDataRequest?.outstandingKeys));
 
   const detail = (await http("GET", `${BASE}/admin/tasks/${taskId}/detail`, a2.token)).json?.data;

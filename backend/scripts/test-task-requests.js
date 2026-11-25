@@ -100,20 +100,21 @@ function readZip(buf) {
 
     // ── 3. Partial data: unfinished fields become editable copies ────────────────
     const reqs = (await api("GET", `/api/admin/clients/${client.id}/tasks`, A)).j.data.find((x) => x.id === t.id).metadata.documentRequests;
-    await api("PATCH", `/api/admin/tasks/${t.id}`, A, { documentRequests: [{ ...reqs[0], done: true }, reqs[1]] });
+    await api("PATCH", `/api/admin/tasks/${t.id}`, A, { documentRequests: reqs });
     m = EMAILS.length;
     r = await api("POST", `/api/admin/tasks/${t.id}/missing-data-request`, A, {
       period: "Oct 1 to 15", note: "We have received your data but some are missing, please upload these.", sendEmail: true,
+      outstandingKeys: [reqs[1].key],
       items: [{ key: reqs[1].key, name: "Bank - 0547 - Oct 1 to 15 Data missing" }, { key: "not_a_real_key", name: "should be dropped" }] });
     check("missing-data request accepted", r.s === 200 && r.j?.data?.missingDataRequest, `${r.s} ${r.buf}`);
     const mdr = r.j?.data?.missingDataRequest;
     check("only real outstanding fields keep an edited name (unknown key dropped)", JSON.stringify(mdr.items) === JSON.stringify([{ key: reqs[1].key, name: "Bank - 0547 - Oct 1 to 15 Data missing" }]), JSON.stringify(mdr.items));
     const mm = EMAILS.slice(m)[0] || {};
     check("email lists the ADMIN'S edited wording", mm.html?.includes("Bank - 0547 - Oct 1 to 15 Data missing") && !mm.html?.includes(">Bank 0547<"), mm.html?.slice(0, 80));
-    check("email does not list the finished field (Bank 0010)", !mm.html?.includes("Bank 0010"));
+    check("email does not list the unticked field (Bank 0010)", !mm.html?.includes("Bank 0010"));
     check("email says 'still missing'", /still missing/i.test(mm.html || ""));
     const row = (await db.query("SELECT admin_status, client_progress, metadata FROM tasks WHERE id=$1", [t.id])).rows[0];
-    check("original document requests are untouched (names, order, done flags)", JSON.stringify(row.metadata.documentRequests.map((q) => [q.name, q.done])) === JSON.stringify([["Bank 0010", true], ["Bank 0547", false]]), JSON.stringify(row.metadata.documentRequests.map((q) => [q.name, q.done])));
+    check("original document requests are untouched (names, order)", JSON.stringify(row.metadata.documentRequests.map((q) => q.name)) === JSON.stringify(["Bank 0010", "Bank 0547"]), JSON.stringify(row.metadata.documentRequests.map((q) => q.name)));
     check("status -> Partial Data received; client sees 'Data pending'", row.admin_status === "Partial Data received" && row.client_progress === "Data pending", `${row.admin_status} / ${row.client_progress}`);
     const bk2 = (await api("GET", `/v3/api/v1/tasks/${t.id}/document-buckets`, C)).j?.data;
     const out = (bk2?.requirements || []).find((q) => q.outstanding);

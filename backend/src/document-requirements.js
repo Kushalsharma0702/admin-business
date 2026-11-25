@@ -113,9 +113,6 @@ function normalizeDocumentRequests(input) {
       maxCount:      null,
       acceptedTypes: REQUEST_FILE_TYPES,
       notes:         String(raw.notes || "").trim(),
-      // Admin's per-request "Mark as done": everything NOT done is what a
-      // Partial Data received task carries into its missing-data section.
-      done:          raw.done === true,
       displayOrder:  typeof raw.displayOrder === "number" ? raw.displayOrder : idx + 1,
     });
   }
@@ -129,11 +126,11 @@ function taskMetadata(task) {
 }
 
 // Display names of a task's document requests, for emails and the client view. With `keys`
-// only those requests; otherwise every request not yet marked done. `overrides` is the
+// only those requests; otherwise every request. `overrides` is the
 // admin's edited wording for the missing-data list ({ key: "Bank - 0049 - Oct 1 to 15 Data missing" }).
 function requestItemNames(metadata, keys = null, overrides = {}) {
   const requests = normalizeDocumentRequests((metadata || {}).documentRequests);
-  const pick = keys ? requests.filter((r) => keys.includes(r.key)) : requests.filter((r) => !r.done);
+  const pick = keys ? requests.filter((r) => keys.includes(r.key)) : requests;
   return pick.map((r) => (overrides && overrides[r.key]) || r.name).filter(Boolean);
 }
 

@@ -43,3 +43,15 @@ export const downloadCSV = (filename: string, rows: readonly Record<string, unkn
   a.href = url; a.download = filename; a.click();
   URL.revokeObjectURL(url);
 };
+
+// Which config key holds "how often" depends on the task type - Corporate Tax
+// (filing + its installments) doesn't have one, it's just tied to fiscal year end.
+export function taskFrequency(t: { taskType?: string | null; config?: unknown }): string {
+  const c = t.config as Record<string, unknown> | undefined;
+  const key = t.taskType === "BOOKKEEPING" ? "bookkeepingFrequency"
+    : t.taskType === "HST" || t.taskType === "HST_QUARTERLY_PAYMENT" ? "salesTaxFrequency"
+    : t.taskType === "PAYROLL" ? "payrollFrequency"
+    : null;
+  const v = key ? c?.[key] : undefined;
+  return typeof v === "string" && v ? v : "—";
+}

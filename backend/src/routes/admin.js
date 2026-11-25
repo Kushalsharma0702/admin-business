@@ -750,12 +750,12 @@ router.post("/tasks/:taskId/missing-data-request", async (req, res) => {
   // Outstanding items must name requests the task actually has, otherwise the
   // client would be chased for something never asked of them.
   const configured = new Set(buildRequestKeys(task));
-  // When the caller doesn't say, outstanding = every request not marked done.
-  const notDoneKeys = normalizeDocumentRequests(safeJson(task.metadata, {}).documentRequests)
-    .filter((r) => !r.done).map((r) => r.key);
+  // When the caller doesn't say, outstanding = every request.
+  const allKeys = normalizeDocumentRequests(safeJson(task.metadata, {}).documentRequests)
+    .map((r) => r.key);
   const outstandingKeys = Array.isArray(b.outstandingKeys)
     ? [...new Set(b.outstandingKeys.map(String).filter((k) => configured.has(k)))]
-    : notDoneKeys.filter((k) => configured.has(k));
+    : allKeys.filter((k) => configured.has(k));
 
   if (!period && !note && !outstandingKeys.length) {
     return res.status(400).json(fail("Give at least a period, a note, or the outstanding documents"));
@@ -831,8 +831,8 @@ router.post("/tasks/:taskId/missing-data-request", async (req, res) => {
 
 // POST /api/admin/tasks/:taskId/request-data
 // body: { period?, note?, sendEmail?: boolean }
-// The first request: asks the client to upload every document field on the task that is
-// not yet marked done. Remembered on the task so the chaser reminders repeat the same note.
+// The first request: asks the client to upload every document field on the task.
+// Remembered on the task so the chaser reminders repeat the same note.
 // Does not change the task's status (use missing-data-request once some data has arrived).
 router.post("/tasks/:taskId/request-data", async (req, res) => {
   const { rows: [task] } = await db.query("SELECT * FROM tasks WHERE id=$1", [req.params.taskId]);
